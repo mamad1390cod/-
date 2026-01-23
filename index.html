@@ -1,0 +1,1373 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>بیسیم - چت صوتی زنده</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            font-family: 'Vazirmatn', sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+        }
+        
+        .radio-wave {
+            position: absolute;
+            border-radius: 50%;
+            border: 2px solid rgba(0, 255, 136, 0.3);
+            animation: wave 2s infinite;
+        }
+        
+        @keyframes wave {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(2.5); opacity: 0; }
+        }
+        
+        .pulse-ring {
+            animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 20px rgba(0, 255, 136, 0); }
+            100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+        }
+        
+        .audio-bar {
+            width: 4px;
+            background: linear-gradient(to top, #00ff88, #00d4ff);
+            border-radius: 2px;
+            animation: audio-wave 0.5s ease-in-out infinite alternate;
+        }
+        
+        @keyframes audio-wave {
+            from { height: 8px; }
+            to { height: 32px; }
+        }
+        
+        .glow-button {
+            box-shadow: 0 0 30px rgba(0, 255, 136, 0.4);
+            transition: all 0.3s ease;
+        }
+        
+        .glow-button:hover {
+            box-shadow: 0 0 50px rgba(0, 255, 136, 0.6);
+            transform: scale(1.02);
+        }
+        
+        .glow-button:active {
+            transform: scale(0.98);
+        }
+        
+        .glow-button.muted {
+            background: linear-gradient(to right, #ef4444, #dc2626) !important;
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.4);
+        }
+        
+        .user-card {
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .talking {
+            border-color: #00ff88 !important;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+        }
+        
+        .control-btn {
+            transition: all 0.2s ease;
+        }
+        
+        .control-btn:hover {
+            transform: scale(1.1);
+        }
+        
+        .control-btn:active {
+            transform: scale(0.95);
+        }
+        
+        .control-btn.active {
+            background: rgba(0, 255, 136, 0.2) !important;
+            border-color: #00ff88 !important;
+            color: #00ff88 !important;
+        }
+        
+        .control-btn.muted {
+            background: rgba(239, 68, 68, 0.2) !important;
+            border-color: #ef4444 !important;
+            color: #ef4444 !important;
+        }
+        
+        input::-webkit-outer-spin-button,
+        input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        
+        input[type=number] {
+            -moz-appearance: textfield;
+            -webkit-appearance: none;
+            appearance: textfield;
+        }
+        
+        .slide-up {
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        .volume-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .volume-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #00ff88;
+            cursor: pointer;
+        }
+        
+        .chat-tab {
+            transition: all 0.2s ease;
+        }
+        
+        .chat-tab:not(.active) {
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.2);
+            color: #9ca3af;
+        }
+        
+        .chat-tab:not(.active):hover {
+            background: rgba(255,255,255,0.1);
+        }
+        
+        .chat-tab.has-unread {
+            animation: unread-pulse 2s infinite;
+        }
+        
+        @keyframes unread-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(0, 255, 136, 0); }
+        }
+        
+        .chat-messages {
+            display: none;
+        }
+        
+        .chat-messages.active {
+            display: block;
+        }
+        
+        .message-bubble {
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        
+        .user-item {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .user-item:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        
+        .user-item.selected {
+            background: rgba(0, 255, 136, 0.1);
+            border-color: #00ff88;
+        }
+        
+        .unread-badge {
+            min-width: 20px;
+            height: 20px;
+            font-size: 11px;
+        }
+        
+        .private-tab-close {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .chat-tab:hover .private-tab-close {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="text-white">
+    <!-- صفحه ورود -->
+    <div id="joinPage" class="min-h-screen flex items-center justify-center p-4">
+        <div class="max-w-md w-full">
+            <!-- لوگو و عنوان -->
+            <div class="text-center mb-8">
+                <div class="relative inline-block mb-6">
+                    <div class="w-24 h-24 bg-gradient-to-br from-green-400 to-cyan-500 rounded-full flex items-center justify-center">
+                        <svg class="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                        </svg>
+                    </div>
+                    <div class="radio-wave w-24 h-24 top-0 left-0"></div>
+                    <div class="radio-wave w-24 h-24 top-0 left-0" style="animation-delay: 0.5s;"></div>
+                    <div class="radio-wave w-24 h-24 top-0 left-0" style="animation-delay: 1s;"></div>
+                </div>
+                <h1 class="text-4xl font-bold bg-gradient-to-r from-green-400 to-cyan-500 bg-clip-text text-transparent">
+                    بیسیم
+                </h1>
+                <p class="text-gray-400 mt-2">چت صوتی زنده و رایگان</p>
+            </div>
+            
+            <!-- فرم ورود -->
+            <div class="bg-white/5 backdrop-blur-xl rounded-2xl p-6 border border-white/10">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">کد کانال (۶ تا ۱۲ رقم)</label>
+                    <input 
+                        type="number" 
+                        id="channelCode" 
+                        placeholder="مثال: 123456"
+                        class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-center text-xl tracking-widest focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400/20 transition-all"
+                        minlength="6"
+                        maxlength="12"
+                    >
+                    <p id="codeError" class="text-red-400 text-sm mt-2 hidden">کد باید بین ۶ تا ۱۲ رقم باشد</p>
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">نام شما (اختیاری)</label>
+                    <input 
+                        type="text" 
+                        id="userName" 
+                        placeholder="کاربر مهمان"
+                        class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400/20 transition-all"
+                        maxlength="20"
+                    >
+                </div>
+                
+                <button 
+                    id="joinBtn"
+                    class="w-full py-4 bg-gradient-to-r from-green-500 to-cyan-500 rounded-xl font-bold text-lg glow-button"
+                >
+                    ورود به کانال
+                </button>
+                
+                <div class="mt-4 text-center">
+                    <button 
+                        id="randomChannel"
+                        class="text-gray-400 hover:text-green-400 text-sm transition-colors"
+                    >
+                        ✨ ساخت کد تصادفی
+                    </button>
+                </div>
+            </div>
+            
+            <!-- راهنما -->
+            <div class="mt-6 text-center text-gray-500 text-sm">
+                <p>برای صحبت با دوستان، همان کد را به آنها بدهید</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- صفحه چت -->
+    <div id="chatPage" class="min-h-screen flex flex-col hidden">
+        <!-- هدر -->
+        <header class="bg-white/5 backdrop-blur-xl border-b border-white/10 p-4">
+            <div class="max-w-6xl mx-auto flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-green-400 to-cyan-500 rounded-full flex items-center justify-center">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <p class="font-bold">کانال: <span id="displayChannel" class="text-green-400"></span></p>
+                        <p class="text-sm text-gray-400"><span id="userCount">0</span> نفر آنلاین</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-2">
+                    <button 
+                        id="changeChannelBtn"
+                        class="px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 rounded-lg text-blue-400 transition-all text-sm"
+                        title="تغییر کانال"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                        </svg>
+                    </button>
+                    
+                    <button 
+                        id="leaveBtn"
+                        class="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-lg text-red-400 transition-all"
+                    >
+                        خروج
+                    </button>
+                </div>
+            </div>
+        </header>
+        
+        <!-- محتوای اصلی - کاربران و چت -->
+        <div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+            <!-- ستون کاربران -->
+            <div class="lg:w-64 p-4 border-b lg:border-b-0 lg:border-l border-white/10 overflow-auto">
+                <h3 class="text-gray-400 text-sm mb-3 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"></path>
+                    </svg>
+                    کاربران آنلاین
+                </h3>
+                <div id="usersList" class="space-y-2">
+                </div>
+            </div>
+            
+            <!-- ستون چت -->
+            <div class="flex-1 flex flex-col min-h-0">
+                <!-- تب‌های چت -->
+                <div class="flex items-center gap-2 p-3 bg-white/5 border-b border-white/10 overflow-x-auto">
+                    <button 
+                        id="publicChatTab"
+                        class="chat-tab active px-4 py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-green-400 text-sm whitespace-nowrap transition-all"
+                    >
+                        💬 چت عمومی
+                    </button>
+                    <div id="privateChatTabs" class="flex gap-2">
+                        <!-- تب‌های چت خصوصی اینجا اضافه می‌شوند -->
+                    </div>
+                </div>
+                
+                <!-- پیام‌ها -->
+                <div id="messagesContainer" class="flex-1 overflow-auto p-4 space-y-3">
+                    <div id="publicMessages" class="chat-messages space-y-3">
+                        <div class="text-center text-gray-500 text-sm py-8">
+                            <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                            </svg>
+                            به چت کانال خوش آمدید!
+                        </div>
+                    </div>
+                    <!-- چت‌های خصوصی به صورت داینامیک اضافه می‌شوند -->
+                </div>
+                
+                <!-- فرم ارسال پیام -->
+                <div class="p-3 bg-white/5 border-t border-white/10">
+                    <div class="flex gap-2">
+                        <input 
+                            type="text" 
+                            id="messageInput" 
+                            placeholder="پیام خود را بنویسید..."
+                            class="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white focus:outline-none focus:border-green-400 focus:ring-2 focus:ring-green-400/20 transition-all"
+                            maxlength="500"
+                        >
+                        <button 
+                            id="sendMessageBtn"
+                            class="px-6 py-3 bg-gradient-to-r from-green-500 to-cyan-500 rounded-xl font-medium hover:opacity-90 transition-all"
+                        >
+                            <svg class="w-5 h-5 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <p id="chatTarget" class="text-xs text-gray-500 mt-2">ارسال به: چت عمومی</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- نشانگر صدا -->
+        <div id="audioIndicator" class="hidden fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-xl rounded-2xl p-8 border border-green-500/50">
+            <div class="flex items-center gap-2 justify-center mb-4">
+                <div class="audio-bar" style="animation-delay: 0s;"></div>
+                <div class="audio-bar" style="animation-delay: 0.1s;"></div>
+                <div class="audio-bar" style="animation-delay: 0.2s;"></div>
+                <div class="audio-bar" style="animation-delay: 0.3s;"></div>
+                <div class="audio-bar" style="animation-delay: 0.4s;"></div>
+            </div>
+            <p class="text-green-400 text-center font-medium">در حال صحبت...</p>
+        </div>
+        
+        <!-- پنل کنترل -->
+        <div class="p-6 bg-white/5 backdrop-blur-xl border-t border-white/10">
+            <div class="max-w-4xl mx-auto">
+                <!-- دکمه‌های کنترل -->
+                <div class="flex justify-center items-center gap-6 mb-6">
+                    <!-- دکمه Mute میکروفون -->
+                    <button 
+                        id="micBtn"
+                        class="control-btn w-14 h-14 rounded-full bg-white/10 border border-white/20 flex items-center justify-center active"
+                        title="قطع/وصل میکروفون"
+                    >
+                        <svg id="micOnIcon" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                        </svg>
+                        <svg id="micOffIcon" class="w-6 h-6 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>
+                        </svg>
+                    </button>
+                    
+                    <!-- دکمه Push-to-Talk -->
+                    <button 
+                        id="pttBtn"
+                        class="w-24 h-24 rounded-full bg-gradient-to-br from-green-500 to-cyan-500 flex items-center justify-center glow-button relative"
+                    >
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                        </svg>
+                        <div id="pttRing" class="absolute inset-0 rounded-full border-4 border-green-400 hidden pulse-ring"></div>
+                    </button>
+                    
+                    <!-- دکمه Mute اسپیکر -->
+                    <button 
+                        id="speakerBtn"
+                        class="control-btn w-14 h-14 rounded-full bg-white/10 border border-white/20 flex items-center justify-center active"
+                        title="قطع/وصل صدا"
+                    >
+                        <svg id="speakerOnIcon" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                        </svg>
+                        <svg id="speakerOffIcon" class="w-6 h-6 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- کنترل ولوم -->
+                <div class="flex items-center justify-center gap-4 mb-4">
+                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                    </svg>
+                    <input 
+                        type="range" 
+                        id="volumeSlider" 
+                        min="0" 
+                        max="100" 
+                        value="100"
+                        class="volume-slider w-32"
+                    >
+                    <span id="volumeValue" class="text-gray-400 text-sm w-10">100%</span>
+                </div>
+                
+                <p id="pttHint" class="text-gray-400 text-sm text-center">نگه دارید و صحبت کنید (یا کلید Space)</p>
+                
+                <!-- تنظیمات -->
+                <div class="mt-4 flex items-center justify-center gap-4">
+                    <label class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                        <input type="checkbox" id="continuousMode" class="w-4 h-4 rounded accent-green-500">
+                        حالت پیوسته (بدون نگه داشتن)
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <!-- نوار وضعیت -->
+        <div id="statusBar" class="bg-green-500/20 border-t border-green-500/30 p-2 text-center text-sm text-green-400">
+            <span id="statusText">متصل</span>
+        </div>
+    </div>
+    
+    <!-- مودال تغییر کانال -->
+    <div id="changeChannelModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-900 rounded-2xl p-6 max-w-sm w-full border border-blue-500/30 slide-up">
+            <div class="text-center">
+                <div class="w-16 h-16 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold mb-4">تغییر کانال</h3>
+                
+                <div class="mb-4">
+                    <input 
+                        type="number" 
+                        id="newChannelCode" 
+                        placeholder="کد کانال جدید"
+                        class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white text-center text-xl tracking-widest focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-all"
+                    >
+                    <p id="newCodeError" class="text-red-400 text-sm mt-2 hidden">کد باید بین ۶ تا ۱۲ رقم باشد</p>
+                </div>
+                
+                <div class="flex gap-3">
+                    <button id="confirmChangeChannel" class="flex-1 px-4 py-3 bg-blue-500 hover:bg-blue-600 rounded-xl font-medium transition-colors">
+                        تغییر
+                    </button>
+                    <button id="cancelChangeChannel" class="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl font-medium transition-colors">
+                        انصراف
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- مودال خطا -->
+    <div id="errorModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-900 rounded-2xl p-6 max-w-sm w-full border border-red-500/30">
+            <div class="text-center">
+                <div class="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold mb-2">خطا</h3>
+                <p id="errorMessage" class="text-gray-400 mb-6"></p>
+                <button id="closeError" class="px-6 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors">
+                    متوجه شدم
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // تنظیمات
+        const SAMPLE_RATE = 16000;
+        const BUFFER_SIZE = 4096;
+        
+        // آدرس سرور
+        const getServerUrl = () => {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            return `${protocol}//${host}/ws`;
+        };
+
+        // متغیرهای گلوبال
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let scriptProcessor = null;
+        let sourceNode = null;
+        let isRecording = false;
+        let channelCode = '';
+        let userName = '';
+        let userId = Math.random().toString(36).substr(2, 9);
+        let users = new Map();
+        let isMicMuted = false;
+        let isSpeakerMuted = false;
+        let volume = 1;
+        let shouldReconnect = true;
+        let playbackContext = null;
+
+        // المان‌ها
+        const joinPage = document.getElementById('joinPage');
+        const chatPage = document.getElementById('chatPage');
+        const channelInput = document.getElementById('channelCode');
+        const userNameInput = document.getElementById('userName');
+        const joinBtn = document.getElementById('joinBtn');
+        const randomChannelBtn = document.getElementById('randomChannel');
+        const leaveBtn = document.getElementById('leaveBtn');
+        const changeChannelBtn = document.getElementById('changeChannelBtn');
+        const pttBtn = document.getElementById('pttBtn');
+        const pttRing = document.getElementById('pttRing');
+        const pttHint = document.getElementById('pttHint');
+        const audioIndicator = document.getElementById('audioIndicator');
+        const displayChannel = document.getElementById('displayChannel');
+        const userCount = document.getElementById('userCount');
+        const usersList = document.getElementById('usersList');
+        const statusText = document.getElementById('statusText');
+        const statusBar = document.getElementById('statusBar');
+        const continuousMode = document.getElementById('continuousMode');
+        const codeError = document.getElementById('codeError');
+        const errorModal = document.getElementById('errorModal');
+        const errorMessage = document.getElementById('errorMessage');
+        const closeError = document.getElementById('closeError');
+        
+        const micBtn = document.getElementById('micBtn');
+        const micOnIcon = document.getElementById('micOnIcon');
+        const micOffIcon = document.getElementById('micOffIcon');
+        const speakerBtn = document.getElementById('speakerBtn');
+        const speakerOnIcon = document.getElementById('speakerOnIcon');
+        const speakerOffIcon = document.getElementById('speakerOffIcon');
+        const volumeSlider = document.getElementById('volumeSlider');
+        const volumeValue = document.getElementById('volumeValue');
+        
+        const changeChannelModal = document.getElementById('changeChannelModal');
+        const newChannelCode = document.getElementById('newChannelCode');
+        const newCodeError = document.getElementById('newCodeError');
+        const confirmChangeChannel = document.getElementById('confirmChangeChannel');
+        const cancelChangeChannel = document.getElementById('cancelChangeChannel');
+        
+        // چت
+        const publicChatTab = document.getElementById('publicChatTab');
+        const privateChatTabs = document.getElementById('privateChatTabs');
+        const messagesContainer = document.getElementById('messagesContainer');
+        const publicMessages = document.getElementById('publicMessages');
+        const messageInput = document.getElementById('messageInput');
+        const sendMessageBtn = document.getElementById('sendMessageBtn');
+        const chatTarget = document.getElementById('chatTarget');
+        
+        // ذخیره چت‌ها
+        let currentChatTarget = 'public'; // 'public' یا ID کاربر
+        let privateChats = new Map(); // userId -> {messages: [], unread: 0}
+        let openPrivateTabs = new Set();
+
+        // اعتبارسنجی کد کانال
+        function validateCode(code) {
+            const codeStr = code.toString();
+            return codeStr.length >= 6 && codeStr.length <= 12 && /^\d+$/.test(codeStr);
+        }
+
+        // نمایش خطا
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorModal.classList.remove('hidden');
+        }
+
+        closeError.onclick = () => errorModal.classList.add('hidden');
+
+        // تولید کد تصادفی
+        randomChannelBtn.onclick = () => {
+            const randomCode = Math.floor(100000 + Math.random() * 900000);
+            channelInput.value = randomCode;
+        };
+
+        // ورود به کانال
+        joinBtn.onclick = async () => {
+            channelCode = channelInput.value.trim();
+            userName = userNameInput.value.trim() || 'کاربر مهمان';
+            
+            if (!validateCode(channelCode)) {
+                codeError.classList.remove('hidden');
+                return;
+            }
+            codeError.classList.add('hidden');
+            
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: SAMPLE_RATE
+                    } 
+                });
+                shouldReconnect = true;
+                connectWebSocket();
+            } catch (err) {
+                showError('لطفاً دسترسی به میکروفون را فعال کنید');
+            }
+        };
+
+        // اتصال WebSocket
+        function connectWebSocket() {
+            const serverUrl = getServerUrl();
+            ws = new WebSocket(`${serverUrl}/${channelCode}/${userId}/${encodeURIComponent(userName)}`);
+            
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => {
+                console.log('Connected to server');
+                joinPage.classList.add('hidden');
+                chatPage.classList.remove('hidden');
+                displayChannel.textContent = channelCode;
+                setStatus('متصل', 'green');
+                initAudio();
+            };
+            
+            ws.onmessage = async (event) => {
+                if (typeof event.data === 'string') {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                } else {
+                    // داده صوتی دریافت شده
+                    if (!isSpeakerMuted) {
+                        playAudioData(event.data);
+                    }
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = () => {
+                console.log('Disconnected from server');
+                setStatus('قطع شده', 'red');
+                
+                if (shouldReconnect && !chatPage.classList.contains('hidden')) {
+                    setTimeout(() => {
+                        if (channelCode && shouldReconnect) {
+                            setStatus('در حال اتصال مجدد...', 'yellow');
+                            connectWebSocket();
+                        }
+                    }, 3000);
+                }
+            };
+        }
+
+        // پردازش پیام‌ها
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'users':
+                    users.clear();
+                    data.users.forEach(user => {
+                        users.set(user.id, user);
+                    });
+                    updateUsersList();
+                    break;
+                    
+                case 'join':
+                    users.set(data.user.id, data.user);
+                    updateUsersList();
+                    // پیام سیستمی
+                    addSystemMessage(`${data.user.name} وارد کانال شد`);
+                    break;
+                    
+                case 'leave':
+                    const leavingUser = users.get(data.userId);
+                    users.delete(data.userId);
+                    updateUsersList();
+                    if (leavingUser) {
+                        addSystemMessage(`${leavingUser.name} از کانال خارج شد`);
+                    }
+                    break;
+                    
+                case 'talking':
+                    setUserTalking(data.userId, data.isTalking);
+                    break;
+                    
+                case 'chat':
+                    // پیام چت دریافت شده
+                    addMessageToChat({
+                        senderId: data.senderId,
+                        senderName: data.senderName,
+                        text: data.text,
+                        isPrivate: data.isPrivate,
+                        targetId: data.targetId,
+                        isMe: false
+                    });
+                    break;
+            }
+        }
+        
+        // پیام سیستمی
+        function addSystemMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'text-center slide-up';
+            div.innerHTML = `<span class="text-xs text-gray-500 bg-white/5 px-3 py-1 rounded-full">${text}</span>`;
+            publicMessages.appendChild(div);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // به‌روزرسانی لیست کاربران
+        function updateUsersList() {
+            usersList.innerHTML = '';
+            userCount.textContent = users.size;
+            
+            users.forEach((user, id) => {
+                const isMe = id === userId;
+                const unread = privateChats.get(id)?.unread || 0;
+                const div = document.createElement('div');
+                div.id = `user-${id}`;
+                div.className = `user-item user-card rounded-xl p-3 flex items-center gap-3 transition-all ${isMe ? 'border-cyan-500/50' : ''}`;
+                div.innerHTML = `
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br ${isMe ? 'from-cyan-400 to-blue-500' : 'from-gray-600 to-gray-700'} flex items-center justify-center text-lg font-bold flex-shrink-0">
+                        ${user.name.charAt(0)}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium truncate">${user.name}</p>
+                        ${isMe ? '<p class="text-xs text-cyan-400">(شما)</p>' : '<p class="text-xs text-gray-500">کلیک برای چت خصوصی</p>'}
+                    </div>
+                    ${!isMe && unread > 0 ? `<span class="unread-badge bg-green-500 text-white rounded-full flex items-center justify-center font-bold">${unread}</span>` : ''}
+                `;
+                
+                // کلیک برای چت خصوصی
+                if (!isMe) {
+                    div.onclick = () => openPrivateChat(id, user.name);
+                }
+                
+                usersList.appendChild(div);
+            });
+        }
+
+        // نمایش کاربر در حال صحبت
+        function setUserTalking(id, isTalking) {
+            const userCard = document.getElementById(`user-${id}`);
+            if (userCard) {
+                if (isTalking) {
+                    userCard.classList.add('talking');
+                } else {
+                    userCard.classList.remove('talking');
+                }
+            }
+        }
+
+        // تنظیم وضعیت
+        function setStatus(text, color) {
+            statusText.textContent = text;
+            statusBar.className = `p-2 text-center text-sm border-t`;
+            if (color === 'green') {
+                statusBar.classList.add('bg-green-500/20', 'border-green-500/30', 'text-green-400');
+            } else if (color === 'red') {
+                statusBar.classList.add('bg-red-500/20', 'border-red-500/30', 'text-red-400');
+            } else if (color === 'yellow') {
+                statusBar.classList.add('bg-yellow-500/20', 'border-yellow-500/30', 'text-yellow-400');
+            }
+        }
+
+        // راه‌اندازی صدا
+        async function initAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: SAMPLE_RATE
+                });
+                
+                playbackContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: SAMPLE_RATE
+                });
+                
+                sourceNode = audioContext.createMediaStreamSource(mediaStream);
+                scriptProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+                
+                scriptProcessor.onaudioprocess = (e) => {
+                    if (isRecording && ws && ws.readyState === WebSocket.OPEN && !isMicMuted) {
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        // تبدیل به Int16
+                        const pcmData = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            const s = Math.max(-1, Math.min(1, inputData[i]));
+                            pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                        }
+                        ws.send(pcmData.buffer);
+                    }
+                };
+                
+                // وصل نمی‌کنیم تا وقتی PTT فشرده نشده
+                
+            } catch (err) {
+                console.error('Error initializing audio:', err);
+                showError('خطا در راه‌اندازی صدا');
+            }
+        }
+
+        // پخش صدای دریافتی
+        function playAudioData(arrayBuffer) {
+            try {
+                if (!playbackContext) return;
+                
+                const int16Data = new Int16Array(arrayBuffer);
+                const floatData = new Float32Array(int16Data.length);
+                
+                // تبدیل Int16 به Float32
+                for (let i = 0; i < int16Data.length; i++) {
+                    floatData[i] = int16Data[i] / (int16Data[i] < 0 ? 0x8000 : 0x7FFF);
+                }
+                
+                const audioBuffer = playbackContext.createBuffer(1, floatData.length, SAMPLE_RATE);
+                audioBuffer.getChannelData(0).set(floatData);
+                
+                const source = playbackContext.createBufferSource();
+                const gainNode = playbackContext.createGain();
+                gainNode.gain.value = volume;
+                
+                source.buffer = audioBuffer;
+                source.connect(gainNode);
+                gainNode.connect(playbackContext.destination);
+                source.start();
+                
+            } catch (err) {
+                console.error('Error playing audio:', err);
+            }
+        }
+
+        // شروع ضبط
+        function startRecording() {
+            if (isMicMuted) {
+                return;
+            }
+            
+            if (audioContext && sourceNode && scriptProcessor) {
+                isRecording = true;
+                sourceNode.connect(scriptProcessor);
+                scriptProcessor.connect(audioContext.destination);
+                
+                pttRing.classList.remove('hidden');
+                audioIndicator.classList.remove('hidden');
+                pttBtn.classList.add('scale-95');
+                
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'talking', isTalking: true }));
+                }
+            }
+        }
+
+        // توقف ضبط
+        function stopRecording() {
+            if (isRecording) {
+                isRecording = false;
+                
+                try {
+                    scriptProcessor.disconnect();
+                    sourceNode.disconnect();
+                } catch(e) {}
+                
+                pttRing.classList.add('hidden');
+                audioIndicator.classList.add('hidden');
+                pttBtn.classList.remove('scale-95');
+                
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'talking', isTalking: false }));
+                }
+            }
+        }
+
+        // کنترل میکروفون
+        micBtn.onclick = () => {
+            isMicMuted = !isMicMuted;
+            
+            if (isMicMuted) {
+                micBtn.classList.remove('active');
+                micBtn.classList.add('muted');
+                micOnIcon.classList.add('hidden');
+                micOffIcon.classList.remove('hidden');
+                pttBtn.classList.add('muted');
+                pttHint.textContent = 'میکروفون خاموش است';
+                
+                if (isRecording) {
+                    stopRecording();
+                }
+            } else {
+                micBtn.classList.add('active');
+                micBtn.classList.remove('muted');
+                micOnIcon.classList.remove('hidden');
+                micOffIcon.classList.add('hidden');
+                pttBtn.classList.remove('muted');
+                pttHint.textContent = 'نگه دارید و صحبت کنید (یا کلید Space)';
+            }
+        };
+
+        // کنترل اسپیکر
+        speakerBtn.onclick = () => {
+            isSpeakerMuted = !isSpeakerMuted;
+            
+            if (isSpeakerMuted) {
+                speakerBtn.classList.remove('active');
+                speakerBtn.classList.add('muted');
+                speakerOnIcon.classList.add('hidden');
+                speakerOffIcon.classList.remove('hidden');
+            } else {
+                speakerBtn.classList.add('active');
+                speakerBtn.classList.remove('muted');
+                speakerOnIcon.classList.remove('hidden');
+                speakerOffIcon.classList.add('hidden');
+            }
+        };
+
+        // کنترل ولوم
+        volumeSlider.oninput = () => {
+            volume = volumeSlider.value / 100;
+            volumeValue.textContent = volumeSlider.value + '%';
+        };
+
+        // رویدادهای دکمه PTT
+        pttBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            if (!continuousMode.checked) {
+                startRecording();
+            }
+        });
+
+        pttBtn.addEventListener('mouseup', (e) => {
+            e.preventDefault();
+            if (!continuousMode.checked) {
+                stopRecording();
+            }
+        });
+
+        pttBtn.addEventListener('mouseleave', (e) => {
+            if (!continuousMode.checked && isRecording) {
+                stopRecording();
+            }
+        });
+
+        pttBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!continuousMode.checked) {
+                startRecording();
+            }
+        });
+
+        pttBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (!continuousMode.checked) {
+                stopRecording();
+            }
+        });
+
+        pttBtn.addEventListener('click', () => {
+            if (continuousMode.checked) {
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+            }
+        });
+
+        // تغییر کانال
+        changeChannelBtn.onclick = () => {
+            changeChannelModal.classList.remove('hidden');
+            newChannelCode.value = '';
+            newCodeError.classList.add('hidden');
+            newChannelCode.focus();
+        };
+
+        cancelChangeChannel.onclick = () => {
+            changeChannelModal.classList.add('hidden');
+        };
+
+        confirmChangeChannel.onclick = async () => {
+            const newCode = newChannelCode.value.trim();
+            
+            if (!validateCode(newCode)) {
+                newCodeError.classList.remove('hidden');
+                return;
+            }
+            
+            shouldReconnect = false;
+            if (ws) {
+                ws.close();
+            }
+            if (isRecording) {
+                stopRecording();
+            }
+            
+            channelCode = newCode;
+            users.clear();
+            updateUsersList();
+            
+            shouldReconnect = true;
+            changeChannelModal.classList.add('hidden');
+            setStatus('در حال اتصال...', 'yellow');
+            
+            setTimeout(() => {
+                connectWebSocket();
+            }, 500);
+        };
+
+        // خروج از کانال
+        leaveBtn.onclick = () => {
+            shouldReconnect = false;
+            
+            if (ws) {
+                ws.close();
+            }
+            if (isRecording) {
+                stopRecording();
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            if (playbackContext) {
+                playbackContext.close();
+            }
+            
+            channelCode = '';
+            users.clear();
+            isMicMuted = false;
+            isSpeakerMuted = false;
+            
+            // ریست چت
+            currentChatTarget = 'public';
+            privateChats.clear();
+            openPrivateTabs.clear();
+            privateChatTabs.innerHTML = '';
+            publicMessages.innerHTML = `
+                <div class="text-center text-gray-500 text-sm py-8">
+                    <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                    </svg>
+                    به چت کانال خوش آمدید!
+                </div>
+            `;
+            // حذف چت‌های خصوصی
+            document.querySelectorAll('.chat-messages:not(#publicMessages)').forEach(el => el.remove());
+            publicMessages.classList.add('active');
+            publicChatTab.classList.add('active');
+            chatTarget.textContent = 'ارسال به: چت عمومی';
+            
+            // ریست UI
+            micBtn.classList.add('active');
+            micBtn.classList.remove('muted');
+            micOnIcon.classList.remove('hidden');
+            micOffIcon.classList.add('hidden');
+            speakerBtn.classList.add('active');
+            speakerBtn.classList.remove('muted');
+            speakerOnIcon.classList.remove('hidden');
+            speakerOffIcon.classList.add('hidden');
+            pttBtn.classList.remove('muted');
+            pttHint.textContent = 'نگه دارید و صحبت کنید (یا کلید Space)';
+            
+            chatPage.classList.add('hidden');
+            joinPage.classList.remove('hidden');
+        };
+
+        // کلید Space برای صحبت
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && !chatPage.classList.contains('hidden') && !continuousMode.checked) {
+                if (document.activeElement.tagName !== 'INPUT') {
+                    e.preventDefault();
+                    if (!isRecording) {
+                        startRecording();
+                    }
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' && !chatPage.classList.contains('hidden') && !continuousMode.checked) {
+                if (document.activeElement.tagName !== 'INPUT') {
+                    e.preventDefault();
+                    stopRecording();
+                }
+            }
+        });
+
+        // Enter برای ورود
+        channelInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                joinBtn.click();
+            }
+        });
+
+        newChannelCode.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                confirmChangeChannel.click();
+            }
+        });
+
+        // بستن مودال با کلیک بیرون
+        changeChannelModal.addEventListener('click', (e) => {
+            if (e.target === changeChannelModal) {
+                changeChannelModal.classList.add('hidden');
+            }
+        });
+        
+        // ===== سیستم چت =====
+        
+        // باز کردن چت خصوصی
+        function openPrivateChat(targetId, targetName) {
+            // اگر تب وجود نداره، بسازش
+            if (!openPrivateTabs.has(targetId)) {
+                openPrivateTabs.add(targetId);
+                
+                // ایجاد تب
+                const tab = document.createElement('button');
+                tab.id = `tab-${targetId}`;
+                tab.className = 'chat-tab px-4 py-2 rounded-lg border text-sm whitespace-nowrap flex items-center gap-2';
+                tab.innerHTML = `
+                    <span>🔒 ${targetName}</span>
+                    <span class="private-tab-close text-red-400 hover:text-red-300" onclick="event.stopPropagation(); closePrivateTab('${targetId}')">&times;</span>
+                `;
+                tab.onclick = () => switchToChat(targetId);
+                privateChatTabs.appendChild(tab);
+                
+                // ایجاد container پیام‌ها
+                const messagesDiv = document.createElement('div');
+                messagesDiv.id = `messages-${targetId}`;
+                messagesDiv.className = 'chat-messages space-y-3';
+                messagesDiv.innerHTML = `
+                    <div class="text-center text-gray-500 text-sm py-4">
+                        <span class="bg-white/10 px-3 py-1 rounded-full">شروع چت خصوصی با ${targetName}</span>
+                    </div>
+                `;
+                messagesContainer.appendChild(messagesDiv);
+                
+                // ایجاد در Map اگر نبود
+                if (!privateChats.has(targetId)) {
+                    privateChats.set(targetId, { messages: [], unread: 0 });
+                }
+            }
+            
+            // سوییچ به این چت
+            switchToChat(targetId);
+        }
+        
+        // بستن تب چت خصوصی
+        function closePrivateTab(targetId) {
+            openPrivateTabs.delete(targetId);
+            
+            // حذف تب
+            const tab = document.getElementById(`tab-${targetId}`);
+            if (tab) tab.remove();
+            
+            // حذف پیام‌ها
+            const messages = document.getElementById(`messages-${targetId}`);
+            if (messages) messages.remove();
+            
+            // اگر این چت فعال بود، برگرد به عمومی
+            if (currentChatTarget === targetId) {
+                switchToChat('public');
+            }
+        }
+        
+        // سوییچ بین چت‌ها
+        function switchToChat(target) {
+            currentChatTarget = target;
+            
+            // آپدیت تب‌ها
+            document.querySelectorAll('.chat-tab').forEach(tab => {
+                tab.classList.remove('active');
+                if (target === 'public' && tab.id === 'publicChatTab') {
+                    tab.classList.add('active');
+                } else if (tab.id === `tab-${target}`) {
+                    tab.classList.add('active');
+                    tab.classList.remove('has-unread');
+                }
+            });
+            
+            // نمایش پیام‌های مربوطه
+            document.querySelectorAll('.chat-messages').forEach(div => {
+                div.classList.remove('active');
+            });
+            
+            if (target === 'public') {
+                publicMessages.classList.add('active');
+                chatTarget.textContent = 'ارسال به: چت عمومی';
+            } else {
+                const messagesDiv = document.getElementById(`messages-${target}`);
+                if (messagesDiv) {
+                    messagesDiv.classList.add('active');
+                }
+                const targetUser = users.get(target);
+                chatTarget.textContent = `ارسال به: ${targetUser?.name || 'کاربر'}`;
+                
+                // پاک کردن unread
+                if (privateChats.has(target)) {
+                    privateChats.get(target).unread = 0;
+                    updateUsersList();
+                }
+            }
+            
+            // اسکرول به پایین
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        // ارسال پیام
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            const message = {
+                type: 'chat',
+                text: text,
+                isPrivate: currentChatTarget !== 'public',
+                targetId: currentChatTarget !== 'public' ? currentChatTarget : null
+            };
+            
+            ws.send(JSON.stringify(message));
+            
+            // نمایش پیام خودمون
+            addMessageToChat({
+                senderId: userId,
+                senderName: userName,
+                text: text,
+                isPrivate: message.isPrivate,
+                targetId: message.targetId,
+                isMe: true
+            });
+            
+            messageInput.value = '';
+        }
+        
+        // اضافه کردن پیام به چت
+        function addMessageToChat(msg) {
+            const time = new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${msg.isMe ? 'justify-end' : 'justify-start'} slide-up`;
+            
+            const bubbleClass = msg.isMe 
+                ? 'bg-gradient-to-r from-green-500 to-cyan-500' 
+                : (msg.isPrivate ? 'bg-purple-600/80' : 'bg-white/10');
+            
+            messageDiv.innerHTML = `
+                <div class="message-bubble ${bubbleClass} rounded-2xl px-4 py-2 ${msg.isMe ? 'rounded-br-md' : 'rounded-bl-md'}">
+                    ${!msg.isMe ? `<p class="text-xs ${msg.isPrivate ? 'text-purple-300' : 'text-green-400'} mb-1">${msg.senderName} ${msg.isPrivate ? '🔒' : ''}</p>` : ''}
+                    <p class="text-white">${escapeHtml(msg.text)}</p>
+                    <p class="text-xs ${msg.isMe ? 'text-white/70' : 'text-gray-400'} mt-1 text-left">${time}</p>
+                </div>
+            `;
+            
+            // کجا اضافه کنیم؟
+            let targetContainer;
+            if (msg.isPrivate) {
+                // چت خصوصی
+                const chatPartnerId = msg.isMe ? msg.targetId : msg.senderId;
+                targetContainer = document.getElementById(`messages-${chatPartnerId}`);
+                
+                // اگر تب باز نیست و پیام از دیگری است
+                if (!msg.isMe && !openPrivateTabs.has(msg.senderId)) {
+                    const sender = users.get(msg.senderId);
+                    if (sender) {
+                        openPrivateChat(msg.senderId, sender.name);
+                    }
+                }
+                
+                // افزایش unread اگر چت فعال نیست
+                if (!msg.isMe && currentChatTarget !== msg.senderId) {
+                    if (!privateChats.has(msg.senderId)) {
+                        privateChats.set(msg.senderId, { messages: [], unread: 0 });
+                    }
+                    privateChats.get(msg.senderId).unread++;
+                    updateUsersList();
+                    
+                    // انیمیشن تب
+                    const tab = document.getElementById(`tab-${msg.senderId}`);
+                    if (tab) tab.classList.add('has-unread');
+                }
+            } else {
+                // چت عمومی
+                targetContainer = publicMessages;
+            }
+            
+            if (targetContainer) {
+                // حذف پیام خوش‌آمدگویی اگر هست
+                const welcome = targetContainer.querySelector('.text-center');
+                if (welcome && targetContainer.children.length === 1) {
+                    welcome.remove();
+                }
+                
+                targetContainer.appendChild(messageDiv);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        }
+        
+        // escape HTML برای امنیت
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Event listeners برای چت
+        sendMessageBtn.onclick = sendMessage;
+        
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        publicChatTab.onclick = () => switchToChat('public');
+        
+        // نمایش چت عمومی به صورت پیش‌فرض
+        publicMessages.classList.add('active');
+    </script>
+</body>
+</html>
