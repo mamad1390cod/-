@@ -7,12 +7,20 @@ import os
 import json
 import asyncio
 from typing import Dict
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from collections import defaultdict
 
 app = FastAPI(title="Walkie-Talkie Voice Chat")
+
+
+app = FastAPI()
+
+BASE_DIR = Path(__file__).resolve().parent
+INDEX_FILE = BASE_DIR / "index.html"
+
 
 # ذخیره کانال‌ها و کاربران
 # channels[channel_code] = {user_id: {"ws": websocket, "name": name}}
@@ -197,15 +205,10 @@ async def websocket_endpoint(
 
 
 @app.get("/")
-async def get_index():
-    """صفحه اصلی"""
-    # اگر فایل index.html وجود داشت
-    if os.path.exists("index.html"):
-        return FileResponse("index.html")
-    elif os.path.exists("I:\python\VOE\index.html"):
-        return FileResponse("I:\python\VOE\index.html")
-    else:
-        return HTMLResponse("<h1>Walkie-Talkie Server Running</h1>")
+def home():
+    if INDEX_FILE.exists():
+        return FileResponse(INDEX_FILE)
+    return {"status": "VOE is running but index.html not found"}
 
 
 @app.get("/health")
