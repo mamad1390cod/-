@@ -1,0 +1,28 @@
+{
+  "users": {
+    "13901390": {
+      "code": "13901390",
+      "name": "پشتیبانی",
+      "country": "IR",
+      "password": "df42ef4ac3769e73eb3412ec702af3d8e63042973ce55a5ec56816407b80860a",
+      "created_at": "2026-01-27T03:07:33.113409",
+      "contacts": [],
+      "blocked": [],
+      "groups": []
+    }
+  },
+  "groups": {},
+  "messages": {
+    "chat_13901390_97885024": [
+      {
+        "type": "message",
+        "id": "1769512196631",
+        "from": "97885024",
+        "senderName": "کاربر",
+        "text": "سلام",
+        "time": 1769512194526.876
+      }
+    ]
+  },
+  "bans": {}
+}
