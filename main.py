@@ -25,8 +25,12 @@ SUPPORT_CODE = "13901390"
 SUPPORT_PASSWORD = "mamad1390"
 
 # دیتابیس
-DATABASE_URL = os.environ.get("DATABASE_URL = "postgresql://postgres:pdmnnEzkQHnhMIfINmopQyTHzIMFylNk@localhost:5432/messenger"
-)")
+
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://postgres:pdmnnEzkQHnhMIfINmopQyTHzIMFylNk@localhost:5432/messenger"
+)
+
 
 # ========== دیتابیس ==========
 db_pool: Optional[asyncpg.Pool] = None
