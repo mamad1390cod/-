@@ -34,7 +34,7 @@ async def init_db():
     global db_pool
     
     # اتصال به دیتابیس
-    DATABASE_URL = os.environ.get("DATABASE_URL")  # ← فقط اینو بگیر از env
+    DATABASE_URL = os.environ.get("postgresql://postgres:pdmnnEzkQHnhMIfINmopQyTHzIMFylNk@postgres.railway.internal:5432/railway")  # ← فقط اینو بگیر از env
 
     try:
         db_pool = await asyncpg.create_pool(
