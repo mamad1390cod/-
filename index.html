@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>پیام‌رسان ضد فیلتر رایگان</title>
+    <title>پیام‌رسان صوتی</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#0f172a">
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
@@ -221,6 +221,15 @@
         
         .admin-table tr:hover {
             background: rgba(255,255,255,0.05);
+        }
+        
+        /* صدای زنگ */
+        .ringtone-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #22c55e;
+            animation: pulse 1s infinite;
         }
     </style>
 </head>
@@ -730,6 +739,8 @@
         let callSeconds = 0;
         let incomingCallData = null;
         let currentCallType = null;
+        let ringtoneInterval = null;
+        let ringtoneAudioCtx = null;
         
         // ویس
         let isRecordingVoice = false;
@@ -738,6 +749,49 @@
         let voiceTimerInterval = null;
         let voiceSeconds = 0;
         let recordedVoiceBlob = null;
+        let voiceStream = null;
+
+        // ========== صدای زنگ ==========
+        function playRingtone() {
+            if (ringtoneAudioCtx) return;
+            
+            ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            const playBeep = () => {
+                if (!ringtoneAudioCtx) return;
+                
+                const oscillator = ringtoneAudioCtx.createOscillator();
+                const gainNode = ringtoneAudioCtx.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(ringtoneAudioCtx.destination);
+                
+                oscillator.frequency.value = 440;
+                oscillator.type = 'sine';
+                gainNode.gain.value = 0.3;
+                
+                oscillator.start();
+                
+                setTimeout(() => {
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, ringtoneAudioCtx.currentTime + 0.1);
+                    setTimeout(() => oscillator.stop(), 100);
+                }, 200);
+            };
+            
+            playBeep();
+            ringtoneInterval = setInterval(playBeep, 1000);
+        }
+        
+        function stopRingtone() {
+            if (ringtoneInterval) {
+                clearInterval(ringtoneInterval);
+                ringtoneInterval = null;
+            }
+            if (ringtoneAudioCtx) {
+                ringtoneAudioCtx.close();
+                ringtoneAudioCtx = null;
+            }
+        }
 
         // ========== توابع کمکی ==========
         function showToast(msg, duration = 3000) {
@@ -827,7 +881,7 @@
             }
         }
 
-        function register() {
+        async function register() {
             const name = document.getElementById('regName').value.trim();
             const country = document.getElementById('regCountry').value;
             const password = document.getElementById('regPassword').value;
@@ -836,15 +890,33 @@
             if (!country) { showToast('کشور را انتخاب کنید'); return; }
             if (password.length < 4) { showToast('رمز حداقل ۴ کاراکتر'); return; }
             
-            currentUser = { code: generateCode(), name, country, password, createdAt: Date.now() };
-            saveData();
-            connectToServer();
-            showMainPage();
-            requestNotification();
-            showToast(`کد شما: ${currentUser.code}`);
+            const code = generateCode();
+            
+            try {
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ code, name, country, password })
+                });
+                
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || 'خطا در ثبت‌نام');
+                    return;
+                }
+                
+                currentUser = { code, name, country, password };
+                saveData();
+                connectToServer();
+                showMainPage();
+                requestNotification();
+                showToast(`کد شما: ${code}`);
+            } catch(e) {
+                showToast('خطا در اتصال به سرور');
+            }
         }
 
-        function login() {
+        async function login() {
             const code = document.getElementById('loginCode').value.trim();
             const password = document.getElementById('loginPassword').value;
             
@@ -854,22 +926,36 @@
                 return;
             }
             
-            // ورود پشتیبانی
-            if (code === SUPPORT_CODE) {
-                currentUser = { code: SUPPORT_CODE, name: 'پشتیبانی', country: 'IR', password };
+            if (!code) { showToast('کد را وارد کنید'); return; }
+            if (!password) { showToast('رمز را وارد کنید'); return; }
+            
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ code, password })
+                });
+                
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || 'کد یا رمز اشتباه است');
+                    return;
+                }
+                
+                const data = await res.json();
+                
+                if (data.isAdmin) {
+                    showAdminPage();
+                    return;
+                }
+                
+                currentUser = { code: data.user.code, name: data.user.name, country: data.user.country, password };
                 saveData();
                 connectToServer();
                 showMainPage();
-                return;
+            } catch(e) {
+                showToast('خطا در اتصال به سرور');
             }
-            
-            if (code.length < 8 || !/^\d+$/.test(code)) { showToast('کد باید حداقل ۸ رقم باشد'); return; }
-            if (!password) { showToast('رمز را وارد کنید'); return; }
-            
-            currentUser = { code, name: 'کاربر', country: 'IR', password, createdAt: Date.now() };
-            saveData();
-            connectToServer();
-            showMainPage();
         }
 
         function logout() {
@@ -1071,20 +1157,34 @@
                     break;
                     
                 case 'incoming_call':
+                    playRingtone();
                     showIncomingCall(data);
                     break;
                     
+                case 'call_ringing':
+                    playRingtone();
+                    document.getElementById('callStatusText').textContent = '🔔 در حال زنگ زدن...';
+                    break;
+                    
                 case 'call_accepted':
+                    stopRingtone();
                     startCallAudio();
                     break;
                     
                 case 'call_rejected':
+                    stopRingtone();
+                    endCallCleanup();
+                    showToast('تماس رد شد');
+                    break;
+                    
                 case 'call_ended':
+                    stopRingtone();
                     endCallCleanup();
                     showToast('تماس پایان یافت');
                     break;
                     
                 case 'group_call_started':
+                    playRingtone();
                     showIncomingCall({ ...data, isGroup: true });
                     break;
                     
@@ -1824,10 +1924,7 @@
         }
 
         // ========== ویس ==========
-        let voiceStream = null;
-        
         async function startVoiceRecord() {
-            // اگر در حال ضبط هستیم، متوقف کن
             if (isRecordingVoice) {
                 stopVoiceRecord();
                 return;
@@ -1841,13 +1938,10 @@
                 recordedVoiceBlob = null;
                 
                 voiceRecorder.ondataavailable = (e) => {
-                    if (e.data.size > 0) {
-                        voiceChunks.push(e.data);
-                    }
+                    if (e.data.size > 0) voiceChunks.push(e.data);
                 };
                 
                 voiceRecorder.onstop = () => {
-                    // متوقف کردن استریم
                     if (voiceStream) {
                         voiceStream.getTracks().forEach(t => t.stop());
                         voiceStream = null;
@@ -1867,22 +1961,18 @@
                 voiceRecorder.start();
                 isRecordingVoice = true;
                 
-                // نمایش رکوردر
-                const recorderEl = document.getElementById('voiceRecorder');
-                recorderEl.classList.add('active');
+                document.getElementById('voiceRecorder').classList.add('active');
                 document.getElementById('voicePreview').classList.add('hidden');
                 document.getElementById('stopVoiceBtn').classList.remove('hidden');
                 document.getElementById('sendVoiceBtn').classList.add('hidden');
                 document.getElementById('voiceTimer').textContent = '00:00';
                 
-                // تایمر
                 voiceTimerInterval = setInterval(() => {
                     voiceSeconds++;
                     document.getElementById('voiceTimer').textContent = formatTime(voiceSeconds);
                 }, 1000);
                 
             } catch(e) {
-                console.error('Microphone error:', e);
                 showToast('دسترسی به میکروفون رد شد');
             }
         }
@@ -1892,7 +1982,6 @@
                 voiceRecorder.stop();
             }
             isRecordingVoice = false;
-            
             if (voiceTimerInterval) {
                 clearInterval(voiceTimerInterval);
                 voiceTimerInterval = null;
@@ -1900,33 +1989,23 @@
         }
 
         function cancelVoice() {
-            // متوقف کردن ضبط
             if (voiceRecorder && voiceRecorder.state === 'recording') {
                 voiceRecorder.stop();
             }
             isRecordingVoice = false;
-            
-            // متوقف کردن تایمر
             if (voiceTimerInterval) {
                 clearInterval(voiceTimerInterval);
                 voiceTimerInterval = null;
             }
-            
-            // متوقف کردن استریم
             if (voiceStream) {
                 voiceStream.getTracks().forEach(t => t.stop());
                 voiceStream = null;
             }
-            
-            // پاکسازی
             voiceChunks = [];
             recordedVoiceBlob = null;
             voiceSeconds = 0;
-            
-            // مخفی کردن رکوردر
             document.getElementById('voiceRecorder').classList.remove('active');
             document.getElementById('voicePreview').classList.add('hidden');
-            document.getElementById('voiceTimer').textContent = '00:00';
         }
 
         function sendVoice() {
@@ -1970,7 +2049,6 @@
                     }));
                 }
                 
-                // پاکسازی بعد از ارسال
                 cancelVoice();
             };
             reader.readAsDataURL(recordedVoiceBlob);
@@ -2013,7 +2091,7 @@
                 
                 document.getElementById('callName').textContent = info?.name || 'تماس';
                 document.getElementById('callAvatar').textContent = currentChatType === 'group' ? '👪' : (info?.name?.charAt(0) || '?');
-                document.getElementById('callStatusText').textContent = 'در حال برقراری...';
+                document.getElementById('callStatusText').textContent = '🔔 در حال زنگ زدن...';
                 document.getElementById('callTimer').classList.add('hidden');
                 document.getElementById('callWaves').classList.add('hidden');
                 document.getElementById('callMembers').classList.add('hidden');
@@ -2046,6 +2124,8 @@
         async function acceptCall() {
             if (!incomingCallData) return;
             
+            stopRingtone();
+            
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true, sampleRate: SAMPLE_RATE }
@@ -2077,6 +2157,7 @@
         }
 
         function rejectCall() {
+            stopRingtone();
             if (incomingCallData && ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'call_reject',
@@ -2155,6 +2236,7 @@
         }
 
         function endCall() {
+            stopRingtone();
             if (ws && ws.readyState === WebSocket.OPEN && currentChat) {
                 ws.send(JSON.stringify({
                     type: currentCallType === 'group' ? 'leave_group_call' : 'call_end',
