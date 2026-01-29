@@ -26,28 +26,29 @@ SUPPORT_PASSWORD = "mamad1390"
 
 # دیتابیس
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:pdmnnEzkQHnhMIfINmopQyTHzIMFylNk@localhost:5432/messenger"
-)
-
-
 # ========== دیتابیس ==========
 db_pool: Optional[asyncpg.Pool] = None
 
 async def init_db():
-    """ایجاد جداول دیتابیس"""
+    """ایجاد اتصال به دیتابیس و آماده‌سازی جداول"""
     global db_pool
     
     # اتصال به دیتابیس
+    DATABASE_URL = os.environ.get("DATABASE_URL")  # ← فقط اینو بگیر از env
+
     try:
-        db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+        db_pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=2,
+            max_size=10,
+            ssl="require"  # ← ضروری برای Railway
+        )
         print(f"✅ Connected to PostgreSQL")
     except Exception as e:
         print(f"❌ Database connection failed: {e}")
         print("⚠️ Running without database (data will not persist)")
         return
-    
+
     async with db_pool.acquire() as conn:
         # جدول کاربران
         await conn.execute("""
