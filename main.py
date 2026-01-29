@@ -1,5 +1,6 @@
 """
-پیام‌رسان صوتی - نسخه کامل با PostgreSQL
+پیام‌رسان صوتی - نسخه ساده با JSON
+بدون نیاز به دیتابیس - فقط فایل JSON
 """
 
 import os
@@ -8,153 +9,73 @@ import asyncio
 import hashlib
 from pathlib import Path
 from typing import Dict, Set, Optional, List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from collections import defaultdict
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
-import asyncpg
 
 # ========== تنظیمات ==========
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
+DATA_FILE = BASE_DIR / "data.json"
 
 # کدهای ویژه
 ADMIN_CODE = "1361649093"
 SUPPORT_CODE = "13901390"
 SUPPORT_PASSWORD = "mamad1390"
 
-# دیتابیس
+# ========== ذخیره‌سازی JSON ==========
+json_data = {
+    "users": {},
+    "bans": {}
+}
 
-# ========== دیتابیس ==========
-db_pool: Optional[asyncpg.Pool] = None
+def load_json_data():
+    """بارگذاری داده‌ها از فایل JSON"""
+    global json_data
+    try:
+        if DATA_FILE.exists():
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                json_data = json.load(f)
+                print(f"✅ Data loaded: {len(json_data.get('users', {}))} users")
+    except Exception as e:
+        print(f"⚠️ Error loading data: {e}")
+        json_data = {"users": {}, "bans": {}}
+    
+    # اضافه کردن اکانت پشتیبانی اگر وجود ندارد
+    if SUPPORT_CODE not in json_data.get("users", {}):
+        json_data.setdefault("users", {})[SUPPORT_CODE] = {
+            "code": SUPPORT_CODE,
+            "name": "پشتیبانی",
+            "country": "IR",
+            "password_hash": hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest(),
+            "created_at": datetime.now().isoformat()
+        }
+        save_json_data()
+        print(f"✅ Support account created: {SUPPORT_CODE}")
+
+def save_json_data():
+    """ذخیره داده‌ها در فایل JSON"""
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+        print(f"💾 Data saved: {len(json_data.get('users', {}))} users")
+    except Exception as e:
+        print(f"❌ Error saving data: {e}")
+
+# ========== توابع دیتابیس (JSON) ==========
 
 async def init_db():
-    """ایجاد اتصال به دیتابیس و آماده‌سازی جداول"""
-    global db_pool
-
-    # اتصال به دیتابیس
-    DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:password@localhost:5432/messenger")
-  # ← فقط اینو بگیر از env
-
-    try:
-        
-        db_pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=2,
-            max_size=10,
-            ssl="require"  # ← ضروری برای Railway
-        )
-        print(f"✅ Connected to PostgreSQL")
-    except Exception as e:
-        print(f"❌ Database connection failed: {e}")
-        print("⚠️ Running without database (data will not persist)")
-        return
-
-    async with db_pool.acquire() as conn:
-        # جدول کاربران
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                code VARCHAR(20) PRIMARY KEY,
-                name VARCHAR(50) NOT NULL,
-                country VARCHAR(10),
-                password_hash VARCHAR(128) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # جدول مخاطبین
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS contacts (
-                id SERIAL PRIMARY KEY,
-                user_code VARCHAR(20) REFERENCES users(code) ON DELETE CASCADE,
-                contact_code VARCHAR(20) REFERENCES users(code) ON DELETE CASCADE,
-                contact_name VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_code, contact_code)
-            )
-        """)
-        
-        # جدول بلاک
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS blocked_users (
-                id SERIAL PRIMARY KEY,
-                user_code VARCHAR(20) REFERENCES users(code) ON DELETE CASCADE,
-                blocked_code VARCHAR(20),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_code, blocked_code)
-            )
-        """)
-        
-        # جدول گروه‌ها
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS groups (
-                code VARCHAR(20) PRIMARY KEY,
-                name VARCHAR(50) NOT NULL,
-                owner_code VARCHAR(20) REFERENCES users(code) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # جدول اعضای گروه
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS group_members (
-                id SERIAL PRIMARY KEY,
-                group_code VARCHAR(20) REFERENCES groups(code) ON DELETE CASCADE,
-                user_code VARCHAR(20) REFERENCES users(code) ON DELETE CASCADE,
-                is_owner BOOLEAN DEFAULT FALSE,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(group_code, user_code)
-            )
-        """)
-        
-        # جدول پیام‌ها
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id VARCHAR(50) PRIMARY KEY,
-                from_code VARCHAR(20),
-                to_code VARCHAR(20),
-                group_code VARCHAR(20),
-                message_type VARCHAR(20) DEFAULT 'text',
-                content TEXT,
-                media_data TEXT,
-                duration VARCHAR(10),
-                is_edited BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # جدول بن
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bans (
-                user_code VARCHAR(20) PRIMARY KEY,
-                is_permanent BOOLEAN DEFAULT FALSE,
-                until_date TIMESTAMP,
-                reason TEXT,
-                banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # ایجاد اکانت پشتیبانی
-        support_exists = await conn.fetchval(
-            "SELECT 1 FROM users WHERE code = $1", SUPPORT_CODE
-        )
-        if not support_exists:
-            await conn.execute("""
-                INSERT INTO users (code, name, country, password_hash)
-                VALUES ($1, $2, $3, $4)
-            """, SUPPORT_CODE, "پشتیبانی", "IR", hash_password(SUPPORT_PASSWORD))
-            print(f"✅ Support account created: {SUPPORT_CODE}")
-        
-        print("✅ Database tables ready")
+    """بارگذاری داده‌ها"""
+    load_json_data()
+    print("✅ JSON storage ready")
 
 
 async def close_db():
-    """بستن اتصال دیتابیس"""
-    global db_pool
-    if db_pool:
-        await db_pool.close()
+    """ذخیره نهایی داده‌ها"""
+    save_json_data()
+    print("✅ Data saved on shutdown")
 
 
 @asynccontextmanager
@@ -173,124 +94,76 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-# ========== توابع دیتابیس ==========
+# ========== توابع دیتابیس (JSON) ==========
 
 async def get_user(code: str) -> Optional[dict]:
     """دریافت اطلاعات کاربر"""
-    if not db_pool:
-        return None
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM users WHERE code = $1", code)
-        return dict(row) if row else None
+    return json_data.get("users", {}).get(code)
 
 
 async def create_user(code: str, name: str, country: str, password: str) -> bool:
     """ایجاد کاربر جدید"""
-    if not db_pool:
+    if code in json_data.get("users", {}):
         return False
-    try:
-        async with db_pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO users (code, name, country, password_hash)
-                VALUES ($1, $2, $3, $4)
-            """, code, name, country, hash_password(password))
-        return True
-    except asyncpg.UniqueViolationError:
-        return False
-    except Exception as e:
-        print(f"Error creating user: {e}")
-        return False
+    
+    json_data.setdefault("users", {})[code] = {
+        "code": code,
+        "name": name,
+        "country": country,
+        "password_hash": hash_password(password),
+        "created_at": datetime.now().isoformat()
+    }
+    save_json_data()
+    return True
 
 
 async def verify_user(code: str, password: str) -> Optional[dict]:
     """تایید کاربر با رمز"""
-    if not db_pool:
-        return None
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM users WHERE code = $1 AND password_hash = $2",
-            code, hash_password(password)
-        )
-        return dict(row) if row else None
+    user = json_data.get("users", {}).get(code)
+    if user and user.get("password_hash") == hash_password(password):
+        return user
+    return None
 
 
 async def is_banned(code: str) -> Optional[dict]:
     """بررسی بن بودن کاربر"""
-    if not db_pool:
+    ban = json_data.get("bans", {}).get(code)
+    if not ban:
         return None
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM bans WHERE user_code = $1", code)
-        if not row:
+    
+    if ban.get('is_permanent'):
+        return {"type": "permanent", "reason": ban.get('reason', '')}
+    
+    until = ban.get('until_date')
+    if until:
+        until_dt = datetime.fromisoformat(until) if isinstance(until, str) else until
+        if datetime.now() < until_dt:
+            return {"type": "temporary", "until": str(until), "reason": ban.get('reason', '')}
+        else:
+            del json_data["bans"][code]
+            save_json_data()
             return None
-        
-        ban = dict(row)
-        if ban['is_permanent']:
-            return {"type": "permanent", "reason": ban.get('reason', '')}
-        
-        if ban['until_date']:
-            if datetime.now() < ban['until_date']:
-                return {"type": "temporary", "until": str(ban['until_date']), "reason": ban.get('reason', '')}
-            else:
-                # بن تمام شده، حذف کن
-                await conn.execute("DELETE FROM bans WHERE user_code = $1", code)
-                return None
-        
-        return None
+    
+    return None
 
 
-async def get_user_contacts(code: str) -> List[dict]:
-    """دریافت مخاطبین کاربر"""
-    if not db_pool:
-        return []
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT c.contact_code, c.contact_name, u.name as real_name
-            FROM contacts c
-            LEFT JOIN users u ON c.contact_code = u.code
-            WHERE c.user_code = $1
-        """, code)
-        return [dict(row) for row in rows]
-
-
-async def get_user_groups(code: str) -> List[dict]:
-    """دریافت گروه‌های کاربر"""
-    if not db_pool:
-        return []
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT g.code, g.name, g.owner_code, gm.is_owner,
-                   (SELECT COUNT(*) FROM group_members WHERE group_code = g.code) as member_count
-            FROM groups g
-            JOIN group_members gm ON g.code = gm.group_code
-            WHERE gm.user_code = $1
-        """, code)
-        return [dict(row) for row in rows]
+async def is_blocked(user_code: str, target_code: str) -> bool:
+    """بررسی بلاک بودن - از localStorage کلاینت استفاده می‌شود"""
+    return False
 
 
 async def get_group_members(group_code: str) -> List[dict]:
     """دریافت اعضای گروه"""
-    if not db_pool:
-        return []
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT gm.user_code as code, u.name, gm.is_owner
-            FROM group_members gm
-            JOIN users u ON gm.user_code = u.code
-            WHERE gm.group_code = $1
-        """, group_code)
-        return [dict(row) for row in rows]
-
-
-async def is_blocked(user_code: str, target_code: str) -> bool:
-    """بررسی بلاک بودن"""
-    if not db_pool:
-        return False
-    async with db_pool.acquire() as conn:
-        result = await conn.fetchval("""
-            SELECT 1 FROM blocked_users 
-            WHERE user_code = $1 AND blocked_code = $2
-        """, target_code, user_code)
-        return result is not None
+    members = []
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT u.code, u.name FROM group_members gm
+                JOIN users u ON gm.user_code = u.code
+                WHERE gm.group_code = $1
+            """, group_code)
+            members = [dict(row) for row in rows]
+    return members
 
 
 # ========== متغیرهای آنلاین ==========
@@ -1043,20 +916,17 @@ async def get_all_users(admin_key: str = ""):
         raise HTTPException(status_code=403, detail="Forbidden")
     
     users = []
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM users ORDER BY created_at DESC")
-            for row in rows:
-                ban = await is_banned(row['code'])
-                users.append({
-                    "code": row['code'],
-                    "name": row['name'],
-                    "country": row.get('country', ''),
-                    "created_at": str(row['created_at']),
-                    "online": row['code'] in online_users,
-                    "banned": ban is not None,
-                    "ban_info": ban
-                })
+    for code, user in json_data.get("users", {}).items():
+        ban = await is_banned(code)
+        users.append({
+            "code": code,
+            "name": user.get('name', 'Unknown'),
+            "country": user.get('country', ''),
+            "created_at": user.get('created_at', ''),
+            "online": code in online_users,
+            "banned": ban is not None,
+            "ban_info": ban
+        })
     
     return {"users": users, "total": len(users), "online": len(online_users)}
 
@@ -1069,24 +939,17 @@ async def ban_user(admin_key: str = "", user_code: str = "", duration: int = 0, 
     if not user_code:
         raise HTTPException(status_code=400, detail="User code required")
     
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            # حذف بن قبلی
-            await conn.execute("DELETE FROM bans WHERE user_code = $1", user_code)
-            
-            if duration == 0:
-                # بن دائمی
-                await conn.execute("""
-                    INSERT INTO bans (user_code, is_permanent, reason)
-                    VALUES ($1, TRUE, $2)
-                """, user_code, reason)
-            else:
-                # بن موقت
-                until = datetime.now() + timedelta(hours=duration)
-                await conn.execute("""
-                    INSERT INTO bans (user_code, is_permanent, until_date, reason)
-                    VALUES ($1, FALSE, $2, $3)
-                """, user_code, until, reason)
+    ban_data = {
+        "is_permanent": duration == 0,
+        "reason": reason,
+        "banned_at": datetime.now().isoformat()
+    }
+    
+    if duration > 0:
+        ban_data["until_date"] = (datetime.now() + timedelta(hours=duration)).isoformat()
+    
+    json_data.setdefault("bans", {})[user_code] = ban_data
+    save_json_data()
     
     # قطع اتصال کاربر
     if user_code in online_users:
@@ -1107,9 +970,9 @@ async def unban_user(admin_key: str = "", user_code: str = ""):
     if admin_key != ADMIN_CODE:
         raise HTTPException(status_code=403, detail="Forbidden")
     
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            await conn.execute("DELETE FROM bans WHERE user_code = $1", user_code)
+    if user_code in json_data.get("bans", {}):
+        del json_data["bans"][user_code]
+        save_json_data()
     
     return {"success": True, "message": f"User {user_code} unbanned"}
 
