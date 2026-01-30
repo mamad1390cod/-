@@ -7,6 +7,7 @@ import json
 import asyncio
 import hashlib
 import aiomysql
+import aiosqlite
 from pathlib import Path
 from typing import Dict, Set, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -18,6 +19,7 @@ from contextlib import asynccontextmanager
 # ========== تنظیمات ==========
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
+DB_FILE = BASE_DIR / "data.db"
 
 # ========== کدهای ویژه ==========
 ADMIN_CODE = "1361649093"
@@ -26,18 +28,20 @@ SUPPORT_PASSWORD = "mamad1390"
 
 # ========== MySQL ==========
 MYSQL_CONFIG = {
-    "host": os.environ.get("MYSQL_HOST", "mysql.railway.internal"),
-    "port": int(os.environ.get("MYSQL_PORT", 3306)),
-    "user": os.environ.get("MYSQL_USER", "root"),
-    "password": os.environ.get("MYSQL_PASSWORD", "OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb"),
-    "db": os.environ.get("MYSQL_DATABASE", "railway"),
+    "host": os.environ.get("MYSQLHOST","mysql.railway.internal"),
+    "port": int(os.environ.get("MYSQLPORT", 3306)),
+    "user": os.environ.get("MYSQLUSER", "root"),
+    "password": os.environ.get("MYSQLPASSWORD", "OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb"),
+    "db": os.environ.get("MYSQLDATABASE", "railway"),
     "charset": "utf8mb4",
     "autocommit": True
 }
 
 # یا از URL کامل
 MYSQL_URL = os.environ.get("MYSQL_URL", os.environ.get("DATABASE_URL", "mysql://root:OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb@mysql.railway.internal:3306/railway"))
+
 pool: Optional[aiomysql.Pool] = None
+sqlite_conn: Optional[aiosqlite.Connection] = None
 
 def parse_mysql_url(url: str) -> dict:
     """پارس کردن MySQL URL"""
@@ -80,22 +84,26 @@ def parse_mysql_url(url: str) -> dict:
     }
 
 async def init_db():
-    """اتصال به MySQL و ساخت جداول"""
-    global pool
-    
+    """اتصال به MySQL یا SQLite"""
+    global pool, sqlite_conn
+
     try:
         config = MYSQL_CONFIG
-        if MYSQL_URL:
-            config = parse_mysql_url(MYSQL_URL)
-        
+
         print(f"🔌 Connecting to MySQL: {config['host']}:{config['port']}/{config['db']}")
-        
+
         pool = await aiomysql.create_pool(
             minsize=1,
             maxsize=10,
             **config
         )
+
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT 1")
+                await conn.commit()
         
+        # ساخت جداول MySQL
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 # جدول کاربران
@@ -138,188 +146,351 @@ async def init_db():
         
     except Exception as e:
         print(f"❌ MySQL Error: {e}")
-        print("⚠️ Falling back to JSON storage...")
-        return False
+        print("⚠️ Falling back to SQLite...")
+        
+        try:
+            sqlite_conn = await aiosqlite.connect(str(DB_FILE))
+            await sqlite_conn.execute("PRAGMA journal_mode=WAL")  # برای concurrent بهتر
+            
+            # ساخت جداول SQLite
+            await sqlite_conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    code TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    country TEXT,
+                    password_hash TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            await sqlite_conn.execute("""
+                CREATE TABLE IF NOT EXISTS bans (
+                    user_code TEXT PRIMARY KEY,
+                    reason TEXT,
+                    is_permanent INTEGER DEFAULT 0,
+                    until_time TEXT,
+                    banned_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_code) REFERENCES users(code) ON DELETE CASCADE
+                )
+            """)
+            
+            # اکانت پشتیبانی
+            support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
+            await sqlite_conn.execute("""
+                INSERT OR REPLACE INTO users (code, name, country, password_hash)
+                VALUES (?, ?, ?, ?)
+            """, (SUPPORT_CODE, "پشتیبانی", "IR", support_hash))
+            
+            await sqlite_conn.commit()
+            
+            print(f"✅ SQLite connected! Support: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
+            return True
+            
+        except Exception as e2:
+            print(f"❌ SQLite Error: {e2}")
+            return False
 
 async def close_db():
-    """بستن اتصال MySQL"""
-    global pool
+    """بستن اتصال MySQL یا SQLite"""
+    global pool, sqlite_conn
     if pool:
         pool.close()
         await pool.wait_closed()
+    if sqlite_conn:
+        await sqlite_conn.close()
 
 # ========== توابع دیتابیس ==========
 async def get_user(code: str) -> Optional[dict]:
     """دریافت کاربر"""
-    if not pool:
-        return get_user_json(code)
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute("SELECT * FROM users WHERE code = %s", (code,))
+                    return await cur.fetchone()
+        except Exception as e:
+            print(f"❌ get_user MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("SELECT * FROM users WHERE code = %s", (code,))
-                return await cur.fetchone()
-    except Exception as e:
-        print(f"❌ get_user error: {e}")
-        return get_user_json(code)
+    if sqlite_conn:
+        try:
+            async with sqlite_conn.execute("SELECT * FROM users WHERE code = ?", (code,)) as cur:
+                row = await cur.fetchone()
+                if row:
+                    return {
+                        "code": row[0],
+                        "name": row[1],
+                        "country": row[2],
+                        "password_hash": row[3],
+                        "created_at": row[4]
+                    }
+        except Exception as e:
+            print(f"❌ get_user SQLite error: {e}")
+    
+    return None
 
 async def create_user(code: str, name: str, country: str, password: str) -> bool:
     """ایجاد کاربر جدید"""
     password_hash = hashlib.sha256(password.encode()).hexdigest()
     
-    if not pool:
-        return create_user_json(code, name, country, password_hash)
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        INSERT INTO users (code, name, country, password_hash)
+                        VALUES (%s, %s, %s, %s)
+                    """, (code, name, country, password_hash))
+                    await conn.commit()
+                    return True
+        except Exception as e:
+            print(f"❌ create_user MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("""
-                    INSERT INTO users (code, name, country, password_hash)
-                    VALUES (%s, %s, %s, %s)
-                """, (code, name, country, password_hash))
-                await conn.commit()
-                return True
-    except Exception as e:
-        print(f"❌ create_user error: {e}")
-        return create_user_json(code, name, country, password_hash)
+    if sqlite_conn:
+        try:
+            await sqlite_conn.execute("""
+                INSERT INTO users (code, name, country, password_hash)
+                VALUES (?, ?, ?, ?)
+            """, (code, name, country, password_hash))
+            await sqlite_conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ create_user SQLite error: {e}")
+    
+    return False
 
 async def verify_user(code: str, password: str) -> Optional[dict]:
     """تایید رمز کاربر"""
     password_hash = hashlib.sha256(password.encode()).hexdigest()
     
-    if not pool:
-        return verify_user_json(code, password_hash)
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        "SELECT * FROM users WHERE code = %s AND password_hash = %s",
+                        (code, password_hash)
+                    )
+                    return await cur.fetchone()
+        except Exception as e:
+            print(f"❌ verify_user MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute(
-                    "SELECT * FROM users WHERE code = %s AND password_hash = %s",
-                    (code, password_hash)
-                )
-                return await cur.fetchone()
-    except Exception as e:
-        print(f"❌ verify_user error: {e}")
-        return verify_user_json(code, password_hash)
+    if sqlite_conn:
+        try:
+            async with sqlite_conn.execute(
+                "SELECT * FROM users WHERE code = ? AND password_hash = ?",
+                (code, password_hash)
+            ) as cur:
+                row = await cur.fetchone()
+                if row:
+                    return {
+                        "code": row[0],
+                        "name": row[1],
+                        "country": row[2],
+                        "password_hash": row[3],
+                        "created_at": row[4]
+                    }
+        except Exception as e:
+            print(f"❌ verify_user SQLite error: {e}")
+    
+    return None
 
 async def get_all_users() -> List[dict]:
     """دریافت همه کاربران"""
-    if not pool:
-        return get_all_users_json()
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute("""
+                        SELECT u.*, b.reason as ban_reason, b.is_permanent, b.until_time
+                        FROM users u
+                        LEFT JOIN bans b ON u.code = b.user_code
+                        ORDER BY u.created_at DESC
+                    """)
+                    users = await cur.fetchall()
+                    
+                    result = []
+                    for u in users:
+                        is_banned = False
+                        if u.get('ban_reason') is not None:
+                            if u.get('is_permanent'):
+                                is_banned = True
+                            elif u.get('until_time') and u['until_time'] > datetime.now():
+                                is_banned = True
+                        
+                        result.append({
+                            "code": u['code'],
+                            "name": u['name'],
+                            "country": u.get('country', ''),
+                            "banned": is_banned,
+                            "ban_reason": u.get('ban_reason'),
+                            "online": u['code'] in online_users
+                        })
+                    
+                    return result
+        except Exception as e:
+            print(f"❌ get_all_users MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("""
-                    SELECT u.*, b.reason as ban_reason, b.is_permanent, b.until_time
-                    FROM users u
-                    LEFT JOIN bans b ON u.code = b.user_code
-                    ORDER BY u.created_at DESC
-                """)
-                users = await cur.fetchall()
+    if sqlite_conn:
+        try:
+            query = """
+                SELECT u.code, u.name, u.country, u.created_at,
+                       b.reason as ban_reason, b.is_permanent, b.until_time
+                FROM users u
+                LEFT JOIN bans b ON u.code = b.user_code
+                ORDER BY u.created_at DESC
+            """
+            async with sqlite_conn.execute(query) as cur:
+                rows = await cur.fetchall()
                 
                 result = []
-                for u in users:
+                for row in rows:
                     is_banned = False
-                    if u.get('ban_reason') is not None:
-                        if u.get('is_permanent'):
+                    ban_reason = row[4]
+                    if ban_reason is not None:
+                        if row[5]:  # is_permanent
                             is_banned = True
-                        elif u.get('until_time') and u['until_time'] > datetime.now():
+                        elif row[6] and datetime.fromisoformat(row[6]) > datetime.now():
                             is_banned = True
                     
                     result.append({
-                        "code": u['code'],
-                        "name": u['name'],
-                        "country": u.get('country', ''),
+                        "code": row[0],
+                        "name": row[1],
+                        "country": row[2] or '',
                         "banned": is_banned,
-                        "ban_reason": u.get('ban_reason'),
-                        "online": u['code'] in online_users
+                        "ban_reason": ban_reason,
+                        "online": row[0] in online_users
                     })
                 
                 return result
-    except Exception as e:
-        print(f"❌ get_all_users error: {e}")
-        return get_all_users_json()
+        except Exception as e:
+            print(f"❌ get_all_users SQLite error: {e}")
+    
+    return []
 
 async def ban_user(code: str, duration: int, reason: str) -> bool:
     """بن کردن کاربر"""
-    if not pool:
-        return ban_user_json(code, duration, reason)
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    if duration == 0:
+                        # بن دائمی
+                        await cur.execute("""
+                            INSERT INTO bans (user_code, reason, is_permanent)
+                            VALUES (%s, %s, TRUE)
+                            ON DUPLICATE KEY UPDATE 
+                            reason = VALUES(reason),
+                            is_permanent = TRUE,
+                            until_time = NULL
+                        """, (code, reason))
+                    else:
+                        # بن موقت
+                        until = datetime.now() + timedelta(hours=duration)
+                        await cur.execute("""
+                            INSERT INTO bans (user_code, reason, is_permanent, until_time)
+                            VALUES (%s, %s, FALSE, %s)
+                            ON DUPLICATE KEY UPDATE 
+                            reason = VALUES(reason),
+                            is_permanent = FALSE,
+                            until_time = VALUES(until_time)
+                        """, (code, reason, until))
+                    
+                    await conn.commit()
+                    return True
+        except Exception as e:
+            print(f"❌ ban_user MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                if duration == 0:
-                    # بن دائمی
-                    await cur.execute("""
-                        INSERT INTO bans (user_code, reason, is_permanent)
-                        VALUES (%s, %s, TRUE)
-                        ON DUPLICATE KEY UPDATE 
-                        reason = VALUES(reason),
-                        is_permanent = TRUE,
-                        until_time = NULL
-                    """, (code, reason))
-                else:
-                    # بن موقت
-                    until = datetime.now() + timedelta(hours=duration)
-                    await cur.execute("""
-                        INSERT INTO bans (user_code, reason, is_permanent, until_time)
-                        VALUES (%s, %s, FALSE, %s)
-                        ON DUPLICATE KEY UPDATE 
-                        reason = VALUES(reason),
-                        is_permanent = FALSE,
-                        until_time = VALUES(until_time)
-                    """, (code, reason, until))
-                
-                await conn.commit()
-                return True
-    except Exception as e:
-        print(f"❌ ban_user error: {e}")
-        return ban_user_json(code, duration, reason)
+    if sqlite_conn:
+        try:
+            if duration == 0:
+                await sqlite_conn.execute("""
+                    INSERT OR REPLACE INTO bans (user_code, reason, is_permanent, until_time)
+                    VALUES (?, ?, 1, NULL)
+                """, (code, reason))
+            else:
+                until = (datetime.now() + timedelta(hours=duration)).isoformat()
+                await sqlite_conn.execute("""
+                    INSERT OR REPLACE INTO bans (user_code, reason, is_permanent, until_time)
+                    VALUES (?, ?, 0, ?)
+                """, (code, reason, until))
+            
+            await sqlite_conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ ban_user SQLite error: {e}")
+    
+    return False
 
 async def unban_user(code: str) -> bool:
     """آزاد کردن کاربر"""
-    if not pool:
-        return unban_user_json(code)
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
+                    await conn.commit()
+                    return True
+        except Exception as e:
+            print(f"❌ unban_user MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
-                await conn.commit()
-                return True
-    except Exception as e:
-        print(f"❌ unban_user error: {e}")
-        return unban_user_json(code)
+    if sqlite_conn:
+        try:
+            await sqlite_conn.execute("DELETE FROM bans WHERE user_code = ?", (code,))
+            await sqlite_conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ unban_user SQLite error: {e}")
+    
+    return False
 
 async def is_banned(code: str) -> tuple[bool, str]:
     """چک کردن بن بودن"""
-    if not pool:
-        return is_banned_json(code)
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute("SELECT * FROM bans WHERE user_code = %s", (code,))
+                    ban = await cur.fetchone()
+                    
+                    if not ban:
+                        return False, ""
+                    
+                    if ban['is_permanent']:
+                        return True, ban.get('reason', '')
+                    
+                    if ban['until_time'] and ban['until_time'] > datetime.now():
+                        return True, ban.get('reason', '')
+                    
+                    # بن منقضی شده - حذفش کن
+                    await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
+                    await conn.commit()
+                    return False, ""
+                    
+        except Exception as e:
+            print(f"❌ is_banned MySQL error: {e}")
     
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("SELECT * FROM bans WHERE user_code = %s", (code,))
-                ban = await cur.fetchone()
-                
-                if not ban:
+    if sqlite_conn:
+        try:
+            async with sqlite_conn.execute("SELECT * FROM bans WHERE user_code = ?", (code,)) as cur:
+                row = await cur.fetchone()
+                if not row:
                     return False, ""
                 
-                if ban['is_permanent']:
-                    return True, ban.get('reason', '')
+                if row[5]:  # is_permanent
+                    return True, row[4] or ""
                 
-                if ban['until_time'] and ban['until_time'] > datetime.now():
-                    return True, ban.get('reason', '')
+                if row[6] and datetime.fromisoformat(row[6]) > datetime.now():
+                    return True, row[4] or ""
                 
                 # بن منقضی شده - حذفش کن
-                await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
-                await conn.commit()
+                await sqlite_conn.execute("DELETE FROM bans WHERE user_code = ?", (code,))
+                await sqlite_conn.commit()
                 return False, ""
                 
-    except Exception as e:
-        print(f"❌ is_banned error: {e}")
-        return is_banned_json(code)
+        except Exception as e:
+            print(f"❌ is_banned SQLite error: {e}")
+    
+    return False, ""
 
 # ========== JSON Fallback ==========
 DATA_FILE = BASE_DIR / "data.json"
@@ -439,10 +610,9 @@ group_calls: Dict[str, dict] = {}
 # ========== FastAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_json()
     db_ok = await init_db()
     if not db_ok:
-        print("⚠️ Using JSON storage")
+        print("⚠️ No database available")
     print("🚀 Server started")
     yield
     await close_db()
@@ -822,10 +992,11 @@ def home():
 
 @app.get("/health")
 async def health():
+    db_type = "mysql" if pool else ("sqlite" if sqlite_conn else "none")
     return {
         "status": "ok",
         "online": len(online_users),
-        "db": "mysql" if pool else "json"
+        "db": db_type
     }
 
 if __name__ == "__main__":
