@@ -36,8 +36,7 @@ MYSQL_CONFIG = {
 }
 
 # یا از URL کامل
-MYSQL_URL = os.environ.get("MYSQL_URL", os.environ.get("DATABASE_URL", "mysql://root:OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb@mysql.railway.internal:3306/railway"))
-
+MYSQL_URL = os.environ.get("MYSQL_URL", os.environ.get("DATABASE_URL"))
 pool: Optional[aiomysql.Pool] = None
 
 def parse_mysql_url(url: str) -> dict:
