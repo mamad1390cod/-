@@ -704,6 +704,24 @@
             </div>
         </div>
 
+        <div id="changeCodeModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div class="glass rounded-2xl p-6 max-w-sm w-full slide-up">
+                <h3 class="text-xl font-bold mb-4 text-center text-blue-400">🔄 تغییر کد کاربر</h3>
+                <p id="changeCodeUserInfo" class="text-center text-gray-300 mb-4"></p>
+                
+                <div class="mb-6">
+                    <label class="block text-sm text-gray-300 mb-2">کد جدید (۸ رقم)</label>
+                    <input type="text" id="newUserCode" placeholder="کد جدید"
+                        class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white focus:outline-none" maxlength="8" pattern="\d{8}">
+                </div>
+                
+                <div class="flex gap-3">
+                    <button onclick="confirmChangeCode()" class="flex-1 py-3 bg-blue-500 hover:bg-blue-600 rounded-xl font-medium transition-all">تغییر</button>
+                    <button onclick="closeModal('changeCodeModal')" class="flex-1 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl font-medium transition-all">انصراف</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Context Menu -->
         <div id="contextMenu" class="context-menu hidden"></div>
 
@@ -1061,6 +1079,7 @@
                                         ? `<button onclick="unbanUser('${u.code}')" class="px-3 py-1 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30">آزاد</button>`
                                         : `<button onclick="showBanModal('${u.code}', '${u.name}')" class="px-3 py-1 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30">بن</button>`
                                     }
+                                    <button onclick="showChangeCodeModal('${u.code}', '${u.name}')" class="px-3 py-1 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 ml-2">تغییر کد</button>
                                 </td>
                             </tr>
                         `).join('')}
@@ -1096,6 +1115,37 @@
                 await fetch(`/api/admin/unban?admin_key=${ADMIN_CODE}&user_code=${code}`, { method: 'POST' });
                 showToast('کاربر آزاد شد');
                 refreshAdminUsers();
+            } catch(e) {
+                showToast('خطا');
+            }
+        }
+
+        let changeCodeTarget = null;
+
+        function showChangeCodeModal(code, name) {
+            changeCodeTarget = code;
+            document.getElementById('changeCodeUserInfo').textContent = `${name} (${code})`;
+            document.getElementById('newUserCode').value = '';
+            document.getElementById('changeCodeModal').classList.remove('hidden');
+        }
+
+        async function confirmChangeCode() {
+            const newCode = document.getElementById('newUserCode').value.trim();
+            if (!newCode || newCode.length !== 8 || !/^\d{8}$/.test(newCode)) {
+                showToast('کد باید ۸ رقم باشد');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/admin/change_code?admin_key=${ADMIN_CODE}&old_code=${changeCodeTarget}&new_code=${newCode}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    showToast('کد تغییر یافت');
+                    closeModal('changeCodeModal');
+                    refreshAdminUsers();
+                } else {
+                    showToast(data.error || 'خطا');
+                }
             } catch(e) {
                 showToast('خطا');
             }
@@ -1354,6 +1404,18 @@
                     removeCallMember(data.code);
                     break;
                     
+                case 'added_to_group_call':
+                    console.log('➕ Added to group call:', data.groupCode);
+                    // شاید اطلاع بده یا چیزی
+                    showToast('به تماس گروهی اضافه شدید');
+                    break;
+                    
+                case 'kicked_from_group_call':
+                    console.log('➖ Kicked from group call:', data.groupCode);
+                    removeCallMember(currentUser.code); // خود را حذف کن
+                    showToast('از تماس گروهی اخراج شدید');
+                    break;
+                    
                 case 'group_info':
                     handleGroupInfo(data);
                     break;
@@ -1573,7 +1635,7 @@
             if (!query) { showToast('کد یا نام را وارد کنید'); return; }
             
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'join_group', query }));
+                ws.send(JSON.stringify({ type: 'join_group_call', to: query }));
             }
             
             closeModal('joinGroupModal');

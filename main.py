@@ -1179,6 +1179,50 @@ async def set_admin_settings(admin_key: str = "", settings: dict = {}):
     
     return {"success": True}
 
+@app.post("/api/admin/change_code")
+async def admin_change_code(admin_key: str = "", old_code: str = "", new_code: str = ""):
+    admin_code = await get_setting("admin_code")
+    if admin_key != admin_code:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    if not old_code or not new_code or len(new_code) != 8 or not new_code.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid codes")
+    
+    # چک کن کد جدید منحصر به فرد باشد
+    existing = await get_user(new_code)
+    if existing:
+        return {"success": False, "error": "کد جدید تکراری است"}
+    
+    # تغییر کد
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE users SET code = ? WHERE code = ?", (new_code, old_code))
+                await conn.commit()
+        except Exception as e:
+            print(f"❌ change_code MySQL error: {e}")
+            return {"success": False, "error": "خطای دیتابیس"}
+    
+    if sqlite_conn:
+        try:
+            await sqlite_conn.execute("UPDATE users SET code = ? WHERE code = ?", (new_code, old_code))
+            await sqlite_conn.commit()
+        except Exception as e:
+            print(f"❌ change_code SQLite error: {e}")
+            return {"success": False, "error": "خطای دیتابیس"}
+    
+    # اگر کاربر آنلاین است، اتصال را قطع کن تا با کد جدید وارد شود
+    if old_code in online_users:
+        try:
+            await online_users[old_code].close()
+        except:
+            pass
+        del online_users[old_code]
+        if old_code in user_names:
+            del user_names[old_code]
+    
+    return {"success": True}
+
 @app.get("/")
 def home():
     if INDEX_FILE.exists():
