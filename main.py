@@ -1,11 +1,12 @@
 """
-پیام‌رسان صوتی - نسخه کامل با تماس گروهی بهبود یافته
+پیام‌رسان صوتی - نسخه MySQL
 """
 
 import os
 import json
 import asyncio
 import hashlib
+import aiomysql
 from pathlib import Path
 from typing import Dict, Set, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -17,67 +18,435 @@ from contextlib import asynccontextmanager
 # ========== تنظیمات ==========
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
-DATA_FILE = BASE_DIR / "data.json"
 
-# ========== کدهای ویژه (قابل تغییر توسط ادمین) ==========
+# ========== کدهای ویژه ==========
 ADMIN_CODE = "1361649093"
-SUPPORT_CODE = "13901390"  # کد پشتیبانی - قابل تغییر
-SUPPORT_PASSWORD = "mamad1390"  # رمز پشتیبانی - قابل تغییر
+SUPPORT_CODE = "13901390"
+SUPPORT_PASSWORD = "mamad1390"
 
-# ========== ذخیره‌سازی ==========
-db = {
-    "users": {},
-    "bans": {}
+# ========== MySQL ==========
+MYSQL_CONFIG = {
+    "host": os.environ.get("MYSQL_HOST", "localhost"),
+    "port": int(os.environ.get("MYSQL_PORT", 3306)),
+    "user": os.environ.get("MYSQL_USER", "root"),
+    "password": os.environ.get("MYSQL_PASSWORD", ""),
+    "db": os.environ.get("MYSQL_DATABASE", "messenger"),
+    "charset": "utf8mb4",
+    "autocommit": True
 }
 
-def load_db():
-    global db
+# یا از URL کامل
+MYSQL_URL = os.environ.get("MYSQL_URL", os.environ.get("DATABASE_URL", "mysql://root:OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb@mysql.railway.internal:3306/railway"))
+
+pool: Optional[aiomysql.Pool] = None
+
+def parse_mysql_url(url: str) -> dict:
+    """پارس کردن MySQL URL"""
+    # mysql://user:pass@host:port/database
+    if url.startswith("mysql://"):
+        url = url[8:]
+    elif url.startswith("mysql+pymysql://"):
+        url = url[16:]
+    
+    # user:pass@host:port/database
+    if "@" in url:
+        user_pass, host_db = url.split("@", 1)
+        if ":" in user_pass:
+            user, password = user_pass.split(":", 1)
+        else:
+            user, password = user_pass, ""
+    else:
+        user, password = "root", ""
+        host_db = url
+    
+    if "/" in host_db:
+        host_port, database = host_db.split("/", 1)
+    else:
+        host_port, database = host_db, "messenger"
+    
+    if ":" in host_port:
+        host, port = host_port.split(":", 1)
+        port = int(port)
+    else:
+        host, port = host_port, 3306
+    
+    return {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "db": database,
+        "charset": "utf8mb4",
+        "autocommit": True
+    }
+
+async def init_db():
+    """اتصال به MySQL و ساخت جداول"""
+    global pool
+    
+    try:
+        config = MYSQL_CONFIG
+        if MYSQL_URL:
+            config = parse_mysql_url(MYSQL_URL)
+        
+        print(f"🔌 Connecting to MySQL: {config['host']}:{config['port']}/{config['db']}")
+        
+        pool = await aiomysql.create_pool(
+            minsize=1,
+            maxsize=10,
+            **config
+        )
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # جدول کاربران
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        code VARCHAR(20) PRIMARY KEY,
+                        name VARCHAR(100) NOT NULL,
+                        country VARCHAR(10),
+                        password_hash VARCHAR(64) NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                
+                # جدول بن‌ها
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS bans (
+                        user_code VARCHAR(20) PRIMARY KEY,
+                        reason VARCHAR(255),
+                        is_permanent BOOLEAN DEFAULT FALSE,
+                        until_time DATETIME,
+                        banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_code) REFERENCES users(code) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                
+                # اکانت پشتیبانی
+                support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
+                await cur.execute("""
+                    INSERT INTO users (code, name, country, password_hash)
+                    VALUES (%s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE 
+                    name = VALUES(name),
+                    password_hash = VALUES(password_hash)
+                """, (SUPPORT_CODE, "پشتیبانی", "IR", support_hash))
+                
+                await conn.commit()
+        
+        print(f"✅ MySQL connected! Support: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ MySQL Error: {e}")
+        print("⚠️ Falling back to JSON storage...")
+        return False
+
+async def close_db():
+    """بستن اتصال MySQL"""
+    global pool
+    if pool:
+        pool.close()
+        await pool.wait_closed()
+
+# ========== توابع دیتابیس ==========
+async def get_user(code: str) -> Optional[dict]:
+    """دریافت کاربر"""
+    if not pool:
+        return get_user_json(code)
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT * FROM users WHERE code = %s", (code,))
+                return await cur.fetchone()
+    except Exception as e:
+        print(f"❌ get_user error: {e}")
+        return get_user_json(code)
+
+async def create_user(code: str, name: str, country: str, password: str) -> bool:
+    """ایجاد کاربر جدید"""
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    if not pool:
+        return create_user_json(code, name, country, password_hash)
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    INSERT INTO users (code, name, country, password_hash)
+                    VALUES (%s, %s, %s, %s)
+                """, (code, name, country, password_hash))
+                await conn.commit()
+                return True
+    except Exception as e:
+        print(f"❌ create_user error: {e}")
+        return create_user_json(code, name, country, password_hash)
+
+async def verify_user(code: str, password: str) -> Optional[dict]:
+    """تایید رمز کاربر"""
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    if not pool:
+        return verify_user_json(code, password_hash)
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    "SELECT * FROM users WHERE code = %s AND password_hash = %s",
+                    (code, password_hash)
+                )
+                return await cur.fetchone()
+    except Exception as e:
+        print(f"❌ verify_user error: {e}")
+        return verify_user_json(code, password_hash)
+
+async def get_all_users() -> List[dict]:
+    """دریافت همه کاربران"""
+    if not pool:
+        return get_all_users_json()
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("""
+                    SELECT u.*, b.reason as ban_reason, b.is_permanent, b.until_time
+                    FROM users u
+                    LEFT JOIN bans b ON u.code = b.user_code
+                    ORDER BY u.created_at DESC
+                """)
+                users = await cur.fetchall()
+                
+                result = []
+                for u in users:
+                    is_banned = False
+                    if u.get('ban_reason') is not None:
+                        if u.get('is_permanent'):
+                            is_banned = True
+                        elif u.get('until_time') and u['until_time'] > datetime.now():
+                            is_banned = True
+                    
+                    result.append({
+                        "code": u['code'],
+                        "name": u['name'],
+                        "country": u.get('country', ''),
+                        "banned": is_banned,
+                        "ban_reason": u.get('ban_reason'),
+                        "online": u['code'] in online_users
+                    })
+                
+                return result
+    except Exception as e:
+        print(f"❌ get_all_users error: {e}")
+        return get_all_users_json()
+
+async def ban_user(code: str, duration: int, reason: str) -> bool:
+    """بن کردن کاربر"""
+    if not pool:
+        return ban_user_json(code, duration, reason)
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                if duration == 0:
+                    # بن دائمی
+                    await cur.execute("""
+                        INSERT INTO bans (user_code, reason, is_permanent)
+                        VALUES (%s, %s, TRUE)
+                        ON DUPLICATE KEY UPDATE 
+                        reason = VALUES(reason),
+                        is_permanent = TRUE,
+                        until_time = NULL
+                    """, (code, reason))
+                else:
+                    # بن موقت
+                    until = datetime.now() + timedelta(hours=duration)
+                    await cur.execute("""
+                        INSERT INTO bans (user_code, reason, is_permanent, until_time)
+                        VALUES (%s, %s, FALSE, %s)
+                        ON DUPLICATE KEY UPDATE 
+                        reason = VALUES(reason),
+                        is_permanent = FALSE,
+                        until_time = VALUES(until_time)
+                    """, (code, reason, until))
+                
+                await conn.commit()
+                return True
+    except Exception as e:
+        print(f"❌ ban_user error: {e}")
+        return ban_user_json(code, duration, reason)
+
+async def unban_user(code: str) -> bool:
+    """آزاد کردن کاربر"""
+    if not pool:
+        return unban_user_json(code)
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
+                await conn.commit()
+                return True
+    except Exception as e:
+        print(f"❌ unban_user error: {e}")
+        return unban_user_json(code)
+
+async def is_banned(code: str) -> tuple[bool, str]:
+    """چک کردن بن بودن"""
+    if not pool:
+        return is_banned_json(code)
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT * FROM bans WHERE user_code = %s", (code,))
+                ban = await cur.fetchone()
+                
+                if not ban:
+                    return False, ""
+                
+                if ban['is_permanent']:
+                    return True, ban.get('reason', '')
+                
+                if ban['until_time'] and ban['until_time'] > datetime.now():
+                    return True, ban.get('reason', '')
+                
+                # بن منقضی شده - حذفش کن
+                await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
+                await conn.commit()
+                return False, ""
+                
+    except Exception as e:
+        print(f"❌ is_banned error: {e}")
+        return is_banned_json(code)
+
+# ========== JSON Fallback ==========
+DATA_FILE = BASE_DIR / "data.json"
+json_db = {"users": {}, "bans": {}}
+
+def load_json():
+    global json_db
     try:
         if DATA_FILE.exists():
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                db = json.load(f)
-            print(f"✅ Loaded {len(db.get('users', {}))} users")
-    except Exception as e:
-        print(f"⚠️ Load error: {e}")
-        db = {"users": {}, "bans": {}}
+                json_db = json.load(f)
+    except:
+        json_db = {"users": {}, "bans": {}}
     
-    # اکانت پشتیبانی - همیشه چک و آپدیت شود
+    # اکانت پشتیبانی
     support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
-    db.setdefault("users", {})[SUPPORT_CODE] = {
+    json_db.setdefault("users", {})[SUPPORT_CODE] = {
         "code": SUPPORT_CODE,
         "name": "پشتیبانی",
         "country": "IR",
-        "password_hash": support_hash,
-        "created_at": datetime.now().isoformat()
+        "password_hash": support_hash
     }
-    save_db()
-    print(f"✅ Support account ready: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
+    save_json()
 
-def save_db():
+def save_json():
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(db, f, ensure_ascii=False, indent=2)
+            json.dump(json_db, f, ensure_ascii=False, indent=2, default=str)
     except Exception as e:
-        print(f"❌ Save error: {e}")
+        print(f"❌ Save JSON error: {e}")
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def get_user_json(code: str) -> Optional[dict]:
+    return json_db.get("users", {}).get(code)
+
+def create_user_json(code: str, name: str, country: str, password_hash: str) -> bool:
+    json_db.setdefault("users", {})[code] = {
+        "code": code,
+        "name": name,
+        "country": country,
+        "password_hash": password_hash
+    }
+    save_json()
+    return True
+
+def verify_user_json(code: str, password_hash: str) -> Optional[dict]:
+    user = json_db.get("users", {}).get(code)
+    if user and user.get("password_hash") == password_hash:
+        return user
+    return None
+
+def get_all_users_json() -> List[dict]:
+    result = []
+    for code, user in json_db.get("users", {}).items():
+        ban = json_db.get("bans", {}).get(code)
+        is_banned = False
+        if ban:
+            if ban.get("is_permanent"):
+                is_banned = True
+            elif ban.get("until"):
+                try:
+                    until = datetime.fromisoformat(ban["until"])
+                    is_banned = until > datetime.now()
+                except:
+                    pass
+        
+        result.append({
+            "code": code,
+            "name": user.get("name", ""),
+            "country": user.get("country", ""),
+            "banned": is_banned,
+            "online": code in online_users
+        })
+    return result
+
+def ban_user_json(code: str, duration: int, reason: str) -> bool:
+    ban_data = {"reason": reason, "banned_at": datetime.now().isoformat()}
+    if duration == 0:
+        ban_data["is_permanent"] = True
+    else:
+        ban_data["until"] = (datetime.now() + timedelta(hours=duration)).isoformat()
+    json_db.setdefault("bans", {})[code] = ban_data
+    save_json()
+    return True
+
+def unban_user_json(code: str) -> bool:
+    if code in json_db.get("bans", {}):
+        del json_db["bans"][code]
+        save_json()
+    return True
+
+def is_banned_json(code: str) -> tuple[bool, str]:
+    ban = json_db.get("bans", {}).get(code)
+    if not ban:
+        return False, ""
+    
+    if ban.get("is_permanent"):
+        return True, ban.get("reason", "")
+    
+    if ban.get("until"):
+        try:
+            until = datetime.fromisoformat(ban["until"])
+            if until > datetime.now():
+                return True, ban.get("reason", "")
+            else:
+                del json_db["bans"][code]
+                save_json()
+        except:
+            pass
+    
+    return False, ""
 
 # ========== آنلاین و تماس ==========
 online_users: Dict[str, WebSocket] = {}
 user_names: Dict[str, str] = {}
-active_calls: Dict[str, dict] = {}  # تماس‌های خصوصی
-
-# تماس‌های گروهی: group_code -> {"members": set(), "starter": str, "active": bool}
 group_calls: Dict[str, dict] = {}
 
 # ========== FastAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_db()
+    load_json()
+    db_ok = await init_db()
+    if not db_ok:
+        print("⚠️ Using JSON storage")
     print("🚀 Server started")
     yield
-    save_db()
+    await close_db()
     print("👋 Server stopped")
 
 app = FastAPI(lifespan=lifespan)
@@ -87,32 +456,16 @@ class ConnectionManager:
     
     async def connect(self, ws: WebSocket, code: str, name: str):
         await ws.accept()
-        
-        # ذخیره اتصال
-        old_ws = online_users.get(code)
         online_users[code] = ws
         user_names[code] = name
-        
         print(f"[+] {name} ({code}) connected. Online: {len(online_users)}")
-        
-        # اطلاع به همه
         await self.broadcast_status(code, True, name)
     
     async def disconnect(self, code: str):
         if code in online_users:
             del online_users[code]
-        
         name = user_names.pop(code, "کاربر")
         print(f"[-] {name} ({code}) disconnected. Online: {len(online_users)}")
-        
-        # پایان تماس
-        if code in active_calls:
-            other = active_calls[code].get("other")
-            del active_calls[code]
-            if other and other in active_calls:
-                del active_calls[other]
-            if other:
-                await self.send_to(other, {"type": "call_ended"})
         
         # خروج از تماس گروهی
         for group_code in list(group_calls.keys()):
@@ -123,30 +476,21 @@ class ConnectionManager:
                     "type": "call_member_left",
                     "code": code
                 }, exclude=code)
-                
-                # اگر تماس خالی شد حذفش کن
                 if not members:
                     del group_calls[group_code]
         
-        # اطلاع به همه
         await self.broadcast_status(code, False, name)
     
     async def send_to(self, code: str, data: dict) -> bool:
-        """ارسال به یک کاربر"""
         if code in online_users:
             try:
                 await online_users[code].send_json(data)
-                print(f"📤 Sent to {code}: {data.get('type')}")
                 return True
-            except Exception as e:
-                print(f"❌ Send error to {code}: {e}")
+            except:
                 return False
-        else:
-            print(f"⚠️ User {code} not online")
-            return False
+        return False
     
     async def send_audio(self, code: str, data: bytes) -> bool:
-        """ارسال صدا"""
         if code in online_users:
             try:
                 await online_users[code].send_bytes(data)
@@ -156,14 +500,7 @@ class ConnectionManager:
         return False
     
     async def broadcast_status(self, code: str, online: bool, name: str):
-        """اطلاع وضعیت به همه"""
-        msg = {
-            "type": "contact_status",
-            "code": code,
-            "online": online,
-            "name": name
-        }
-        
+        msg = {"type": "contact_status", "code": code, "online": online, "name": name}
         tasks = []
         for user_code, ws in list(online_users.items()):
             if user_code != code:
@@ -171,17 +508,12 @@ class ConnectionManager:
                     tasks.append(ws.send_json(msg))
                 except:
                     pass
-        
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        
-        print(f"📡 Broadcast status: {name} is {'online' if online else 'offline'}")
     
     async def broadcast_to_call(self, group_code: str, data: dict, exclude: str = None):
-        """ارسال به اعضای تماس گروهی"""
         if group_code not in group_calls:
             return
-        
         members = group_calls[group_code].get("members", set())
         tasks = []
         for member in members:
@@ -190,21 +522,6 @@ class ConnectionManager:
                     tasks.append(online_users[member].send_json(data))
                 except:
                     pass
-        
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-    
-    async def broadcast_to_group_members(self, group_code: str, data: dict, exclude: str = None):
-        """ارسال به همه اعضای گروه (نه فقط تماس)"""
-        members = get_group_members(group_code)
-        tasks = []
-        for m in members:
-            if m["code"] != exclude and m["code"] in online_users:
-                try:
-                    tasks.append(online_users[m["code"]].send_json(data))
-                except:
-                    pass
-        
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -214,13 +531,12 @@ manager = ConnectionManager()
 @app.websocket("/ws/{code}/{name}")
 async def websocket_endpoint(ws: WebSocket, code: str, name: str):
     # چک بن
-    if code in db.get("bans", {}):
-        ban = db["bans"][code]
-        if ban.get("is_permanent") or (ban.get("until") and datetime.fromisoformat(ban["until"]) > datetime.now()):
-            await ws.accept()
-            await ws.send_json({"type": "banned", "reason": ban.get("reason", "")})
-            await ws.close()
-            return
+    banned, reason = await is_banned(code)
+    if banned:
+        await ws.accept()
+        await ws.send_json({"type": "banned", "reason": reason})
+        await ws.close()
+        return
     
     await manager.connect(ws, code, name)
     
@@ -229,21 +545,12 @@ async def websocket_endpoint(ws: WebSocket, code: str, name: str):
             msg = await ws.receive()
             
             if "bytes" in msg:
-                # صدا
-                audio = msg["bytes"]
-                
-                # تماس خصوصی
-                if code in active_calls:
-                    other = active_calls[code].get("other")
-                    if other:
-                        await manager.send_audio(other, audio)
-                
-                # تماس گروهی
-                for gc, members in group_calls.items():
-                    if code in members:
-                        for m in members:
+                # صدا - ارسال به تماس گروهی
+                for gc, call_data in list(group_calls.items()):
+                    if code in call_data.get("members", set()):
+                        for m in call_data["members"]:
                             if m != code:
-                                await manager.send_audio(m, audio)
+                                await manager.send_audio(m, msg["bytes"])
                         break
             
             elif "text" in msg:
@@ -256,22 +563,18 @@ async def websocket_endpoint(ws: WebSocket, code: str, name: str):
     except WebSocketDisconnect:
         await manager.disconnect(code)
     except Exception as e:
-        print(f"[!] Error for {code}: {e}")
+        print(f"[!] Error: {e}")
         await manager.disconnect(code)
 
 async def handle_message(sender: str, data: dict):
     msg_type = data.get("type")
     sender_name = user_names.get(sender, "کاربر")
     
-    print(f"📨 From {sender}: {msg_type}")
-    
-    # ========== Sync ==========
     if msg_type == "sync":
-        # ارسال وضعیت مخاطبین
         contacts = data.get("contacts", [])
         for c in contacts:
             is_online = c in online_users
-            c_name = user_names.get(c) or db.get("users", {}).get(c, {}).get("name", "کاربر")
+            c_name = user_names.get(c, "کاربر")
             await manager.send_to(sender, {
                 "type": "contact_status",
                 "code": c,
@@ -279,98 +582,32 @@ async def handle_message(sender: str, data: dict):
                 "name": c_name
             })
     
-    # ========== پیام خصوصی ==========
     elif msg_type == "message":
         to = data.get("to")
-        text = data.get("text", "")[:2000]
-        msg_id = data.get("id", str(datetime.now().timestamp()))
-        
-        if not to or not text:
-            return
-        
-        # ارسال به گیرنده
-        sent = await manager.send_to(to, {
+        await manager.send_to(to, {
             "type": "message",
-            "id": msg_id,
+            "id": data.get("id"),
             "from": sender,
             "senderName": sender_name,
-            "text": text,
+            "text": data.get("text", ""),
             "time": datetime.now().timestamp() * 1000
         })
-        
-        print(f"💬 Message from {sender} to {to}: {text[:50]}... (sent: {sent})")
     
-    # ========== ویرایش پیام ==========
-    elif msg_type == "edit_message":
-        to = data.get("to")
-        msg_id = data.get("id")
-        text = data.get("text", "")
-        is_group = data.get("isGroup", False)
-        
-        if is_group:
-            # broadcast به گروه
-            members = get_group_members(to)
-            for m in members:
-                if m["code"] != sender:
-                    await manager.send_to(m["code"], {
-                        "type": "message_edited",
-                        "id": msg_id,
-                        "text": text,
-                        "groupCode": to
-                    })
-        else:
-            await manager.send_to(to, {
-                "type": "message_edited",
-                "id": msg_id,
-                "text": text,
-                "from": sender
-            })
-    
-    # ========== حذف پیام ==========
-    elif msg_type == "delete_message":
-        to = data.get("to")
-        msg_id = data.get("id")
-        is_group = data.get("isGroup", False)
-        
-        if is_group:
-            members = get_group_members(to)
-            for m in members:
-                if m["code"] != sender:
-                    await manager.send_to(m["code"], {
-                        "type": "message_deleted",
-                        "id": msg_id,
-                        "groupCode": to
-                    })
-        else:
-            await manager.send_to(to, {
-                "type": "message_deleted",
-                "id": msg_id,
-                "from": sender
-            })
-    
-    # ========== پیام گروهی ==========
     elif msg_type == "group_message":
         group_code = data.get("to")
-        text = data.get("text", "")[:2000]
-        msg_id = data.get("id", str(datetime.now().timestamp()))
-        
-        members = get_group_members(group_code)
-        
-        for m in members:
-            if m["code"] != sender:
-                await manager.send_to(m["code"], {
+        # ارسال به همه آنلاین‌ها (در واقعیت باید به اعضای گروه)
+        for user_code in list(online_users.keys()):
+            if user_code != sender:
+                await manager.send_to(user_code, {
                     "type": "group_message",
-                    "id": msg_id,
+                    "id": data.get("id"),
                     "groupCode": group_code,
                     "from": sender,
                     "senderName": sender_name,
-                    "text": text,
+                    "text": data.get("text", ""),
                     "time": datetime.now().timestamp() * 1000
                 })
-        
-        print(f"👪 Group message to {group_code} from {sender}")
     
-    # ========== مدیا ==========
     elif msg_type == "media":
         to = data.get("to")
         await manager.send_to(to, {
@@ -384,161 +621,41 @@ async def handle_message(sender: str, data: dict):
             "time": datetime.now().timestamp() * 1000
         })
     
-    elif msg_type == "group_media":
-        group_code = data.get("to")
-        members = get_group_members(group_code)
-        
-        for m in members:
-            if m["code"] != sender:
-                await manager.send_to(m["code"], {
-                    "type": "media",
-                    "id": data.get("id"),
-                    "groupCode": group_code,
-                    "from": sender,
-                    "senderName": sender_name,
-                    "mediaType": data.get("mediaType"),
-                    "mediaData": data.get("mediaData"),
-                    "duration": data.get("duration"),
-                    "time": datetime.now().timestamp() * 1000
-                })
-    
-    # ========== مخاطب ==========
-    elif msg_type == "add_contact":
-        contact_code = data.get("code")
-        if contact_code in online_users:
-            await manager.send_to(sender, {
-                "type": "contact_status",
-                "code": contact_code,
-                "online": True,
-                "name": user_names.get(contact_code, "کاربر")
-            })
-        elif contact_code in db.get("users", {}):
-            await manager.send_to(sender, {
-                "type": "user_info",
-                "code": contact_code,
-                "name": db["users"][contact_code].get("name", "کاربر")
-            })
-    
-    # ========== بلاک ==========
-    elif msg_type == "block":
-        # اطلاع به کاربر بلاک شده که نمی‌تواند پیام دهد
-        pass
-    
-    # ========== گروه ==========
-    elif msg_type == "create_group":
-        # گروه در localStorage کلاینت ذخیره می‌شود
-        group = data.get("group", {})
-        print(f"👪 Group created: {group.get('name')} by {sender}")
-    
-    elif msg_type == "join_group":
-        query = data.get("query", "")
-        # اطلاعات گروه را برگردان
-        await manager.send_to(sender, {
-            "type": "group_info",
-            "group": {
-                "code": query,
-                "name": f"گروه {query}",
-                "members": []
-            }
-        })
-    
-    elif msg_type == "add_member":
-        group_code = data.get("groupCode")
-        member_code = data.get("memberCode")
-        
-        # اطلاع به عضو جدید
-        await manager.send_to(member_code, {
-            "type": "group_info",
-            "group": {
-                "code": group_code,
-                "name": data.get("groupName", "گروه"),
-                "members": data.get("members", [])
-            }
-        })
-    
-    elif msg_type == "kick_member":
-        member_code = data.get("memberCode")
-        group_code = data.get("groupCode")
-        
-        await manager.send_to(member_code, {
-            "type": "kicked",
-            "groupCode": group_code,
-            "groupName": data.get("groupName", "گروه")
-        })
-    
-    # ========== تماس ==========
     elif msg_type == "call_request":
         to = data.get("to")
-        
-        # ذخیره تماس
-        active_calls[sender] = {"other": to, "status": "ringing"}
-        
-        # ارسال به گیرنده
         await manager.send_to(to, {
             "type": "incoming_call",
             "callerCode": sender,
             "callerName": sender_name
         })
-        
-        # اطلاع به تماس‌گیرنده
-        await manager.send_to(sender, {
-            "type": "call_ringing",
-            "to": to
-        })
-        
-        print(f"📞 Call request: {sender} -> {to}")
+        await manager.send_to(sender, {"type": "call_ringing", "to": to})
     
     elif msg_type == "call_accept":
         to = data.get("to")
-        
-        active_calls[sender] = {"other": to, "status": "connected"}
-        active_calls[to] = {"other": sender, "status": "connected"}
-        
         await manager.send_to(to, {"type": "call_accepted"})
-        
-        print(f"📞 Call connected: {sender} <-> {to}")
     
     elif msg_type == "call_reject":
         to = data.get("to")
-        
-        if sender in active_calls:
-            del active_calls[sender]
-        if to in active_calls:
-            del active_calls[to]
-        
         await manager.send_to(to, {"type": "call_rejected"})
-        
-        print(f"📵 Call rejected: {to} rejected {sender}")
     
     elif msg_type == "call_end":
         to = data.get("to")
-        
-        if sender in active_calls:
-            del active_calls[sender]
-        if to in active_calls:
-            del active_calls[to]
-        
         await manager.send_to(to, {"type": "call_ended"})
-        
-        print(f"📵 Call ended: {sender} <-> {to}")
     
-    # ========== تماس گروهی ==========
+    # تماس گروهی
     elif msg_type == "group_call":
         group_code = data.get("to")
+        group_name = data.get("groupName", "گروه")
         
-        # چک کنیم آیا تماس گروهی فعال وجود دارد
         if group_code in group_calls and group_calls[group_code].get("active"):
-            # تماس فعال هست - به آن ملحق شو
+            # تماس فعال - ملحق شو
             group_calls[group_code]["members"].add(sender)
-            
-            # اطلاع به بقیه اعضای تماس
             await manager.broadcast_to_call(group_code, {
                 "type": "call_member_joined",
                 "code": sender,
                 "name": sender_name
             }, exclude=sender)
             
-            # ارسال لیست اعضای فعلی به کاربر جدید
             for m in group_calls[group_code]["members"]:
                 if m != sender:
                     await manager.send_to(sender, {
@@ -547,60 +664,43 @@ async def handle_message(sender: str, data: dict):
                         "name": user_names.get(m, "کاربر")
                     })
             
-            # اطلاع به کاربر که تماس قبول شده
             await manager.send_to(sender, {"type": "call_accepted"})
-            
-            print(f"📞 {sender_name} joined existing group call: {group_code}")
         else:
-            # تماس جدید ایجاد کن
+            # تماس جدید
             group_calls[group_code] = {
                 "members": {sender},
                 "starter": sender,
                 "active": True
             }
             
-            # اطلاع به همه اعضای گروه (نه فقط تماس)
-            members = get_group_members(group_code)
-            for m in members:
-                if m["code"] != sender and m["code"] in online_users:
-                    await manager.send_to(m["code"], {
+            # ارسال به همه آنلاین‌ها (باید به اعضای گروه باشد)
+            for user_code in list(online_users.keys()):
+                if user_code != sender:
+                    await manager.send_to(user_code, {
                         "type": "incoming_call",
                         "callerCode": sender,
                         "callerName": sender_name,
                         "groupCode": group_code,
-                        "groupName": data.get("groupName", "گروه"),
+                        "groupName": group_name,
                         "isGroup": True
                     })
             
-            # به تماس‌گیرنده بگو در حال زنگ زدن
-            await manager.send_to(sender, {
-                "type": "call_ringing",
-                "to": group_code,
-                "isGroup": True
-            })
-            
-            print(f"📞 Group call started: {group_code} by {sender}")
+            await manager.send_to(sender, {"type": "call_ringing", "isGroup": True})
     
     elif msg_type == "join_group_call":
         group_code = data.get("to")
         
         if group_code not in group_calls:
-            group_calls[group_code] = {
-                "members": set(),
-                "starter": sender,
-                "active": True
-            }
+            group_calls[group_code] = {"members": set(), "active": True}
         
         group_calls[group_code]["members"].add(sender)
         
-        # اطلاع به بقیه اعضای تماس
         await manager.broadcast_to_call(group_code, {
             "type": "call_member_joined",
             "code": sender,
             "name": sender_name
         }, exclude=sender)
         
-        # ارسال لیست اعضا به کاربر جدید
         for m in group_calls[group_code]["members"]:
             if m != sender:
                 await manager.send_to(sender, {
@@ -609,42 +709,20 @@ async def handle_message(sender: str, data: dict):
                     "name": user_names.get(m, "کاربر")
                 })
         
-        # اطلاع به شروع‌کننده تماس که کسی جواب داده
         starter = group_calls[group_code].get("starter")
         if starter and starter != sender:
             await manager.send_to(starter, {"type": "call_accepted"})
-        
-        print(f"📞 {sender_name} joined group call: {group_code}")
-    
-    elif msg_type == "reject_group_call":
-        # رد تماس گروهی - فقط برای این کاربر، تماس ادامه دارد
-        group_code = data.get("to")
-        print(f"📵 {sender_name} rejected group call: {group_code}")
-        # هیچ کاری نمی‌کنیم - تماس برای بقیه ادامه دارد
     
     elif msg_type == "leave_group_call":
         group_code = data.get("to")
-        
         if group_code in group_calls:
             group_calls[group_code]["members"].discard(sender)
-            
             await manager.broadcast_to_call(group_code, {
                 "type": "call_member_left",
                 "code": sender
             })
-            
-            # اگر هیچ‌کس در تماس نمانده، تماس را حذف کن
             if not group_calls[group_code]["members"]:
                 del group_calls[group_code]
-                print(f"📵 Group call ended: {group_code}")
-            else:
-                print(f"📵 {sender_name} left group call: {group_code}")
-
-def get_group_members(group_code: str) -> List[dict]:
-    """دریافت اعضای گروه - از کلاینت‌ها sync می‌شود"""
-    # فعلاً همه آنلاین‌ها را برمی‌گرداند
-    # در نسخه بعدی باید از دیتابیس بخوانیم
-    return [{"code": c, "name": n} for c, n in user_names.items()]
 
 # ========== API ==========
 @app.post("/api/register")
@@ -660,17 +738,14 @@ async def register(data: dict):
     if len(password) < 4:
         raise HTTPException(400, "رمز حداقل ۴ کاراکتر")
     
-    if code in db.get("users", {}):
+    # چک تکراری
+    existing = await get_user(code)
+    if existing:
         raise HTTPException(400, "این کد قبلاً ثبت شده")
     
-    db.setdefault("users", {})[code] = {
-        "code": code,
-        "name": name,
-        "country": country,
-        "password_hash": hash_password(password),
-        "created_at": datetime.now().isoformat()
-    }
-    save_db()
+    success = await create_user(code, name, country, password)
+    if not success:
+        raise HTTPException(500, "خطا در ثبت‌نام")
     
     print(f"✅ New user: {name} ({code})")
     return {"success": True, "code": code}
@@ -685,25 +760,14 @@ async def login(data: dict):
         return {"success": True, "isAdmin": True}
     
     # چک بن
-    if code in db.get("bans", {}):
-        ban = db["bans"][code]
-        if ban.get("is_permanent"):
-            raise HTTPException(403, f"شما بن دائمی شده‌اید: {ban.get('reason', '')}")
-        if ban.get("until"):
-            until = datetime.fromisoformat(ban["until"])
-            if until > datetime.now():
-                raise HTTPException(403, f"شما تا {until.strftime('%Y-%m-%d %H:%M')} بن هستید")
-            else:
-                del db["bans"][code]
-                save_db()
+    banned, reason = await is_banned(code)
+    if banned:
+        raise HTTPException(403, f"شما بن شده‌اید: {reason}")
     
     # چک کاربر
-    user = db.get("users", {}).get(code)
+    user = await verify_user(code, password)
     if not user:
-        raise HTTPException(401, "کاربری با این کد وجود ندارد")
-    
-    if user.get("password_hash") != hash_password(password):
-        raise HTTPException(401, "رمز اشتباه است")
+        raise HTTPException(401, "کد یا رمز اشتباه است")
     
     return {
         "success": True,
@@ -719,18 +783,7 @@ async def admin_users(admin_key: str = ""):
     if admin_key != ADMIN_CODE:
         raise HTTPException(403, "دسترسی ندارید")
     
-    users = []
-    for code, user in db.get("users", {}).items():
-        ban = db.get("bans", {}).get(code)
-        users.append({
-            "code": code,
-            "name": user.get("name", ""),
-            "country": user.get("country", ""),
-            "online": code in online_users,
-            "banned": ban is not None,
-            "ban_info": ban
-        })
-    
+    users = await get_all_users()
     return {
         "users": users,
         "total": len(users),
@@ -742,18 +795,7 @@ async def admin_ban(admin_key: str = "", user_code: str = "", duration: int = 0,
     if admin_key != ADMIN_CODE:
         raise HTTPException(403, "دسترسی ندارید")
     
-    ban_data = {
-        "reason": reason,
-        "banned_at": datetime.now().isoformat()
-    }
-    
-    if duration == 0:
-        ban_data["is_permanent"] = True
-    else:
-        ban_data["until"] = (datetime.now() + timedelta(hours=duration)).isoformat()
-    
-    db.setdefault("bans", {})[user_code] = ban_data
-    save_db()
+    await ban_user(user_code, duration, reason)
     
     # قطع اتصال
     if user_code in online_users:
@@ -770,10 +812,7 @@ async def admin_unban(admin_key: str = "", user_code: str = ""):
     if admin_key != ADMIN_CODE:
         raise HTTPException(403, "دسترسی ندارید")
     
-    if user_code in db.get("bans", {}):
-        del db["bans"][user_code]
-        save_db()
-    
+    await unban_user(user_code)
     return {"success": True}
 
 @app.get("/")
@@ -787,11 +826,10 @@ async def health():
     return {
         "status": "ok",
         "online": len(online_users),
-        "users": len(db.get("users", {}))
+        "db": "mysql" if pool else "json"
     }
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    print(f"🚀 Starting on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
