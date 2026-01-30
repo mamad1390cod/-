@@ -1,5 +1,5 @@
 """
-پیام‌رسان صوتی - نسخه اصلاح شده Real-Time
+پیام‌رسان صوتی - نسخه کامل با تماس گروهی بهبود یافته
 """
 
 import os
@@ -19,9 +19,10 @@ BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
 DATA_FILE = BASE_DIR / "data.json"
 
+# ========== کدهای ویژه (قابل تغییر توسط ادمین) ==========
 ADMIN_CODE = "1361649093"
-SUPPORT_CODE = "13901390"
-SUPPORT_PASSWORD = "mamad1390"
+SUPPORT_CODE = "13901390"  # کد پشتیبانی - قابل تغییر
+SUPPORT_PASSWORD = "mamad1390"  # رمز پشتیبانی - قابل تغییر
 
 # ========== ذخیره‌سازی ==========
 db = {
@@ -40,16 +41,17 @@ def load_db():
         print(f"⚠️ Load error: {e}")
         db = {"users": {}, "bans": {}}
     
-    # اکانت پشتیبانی
-    if SUPPORT_CODE not in db.get("users", {}):
-        db.setdefault("users", {})[SUPPORT_CODE] = {
-            "code": SUPPORT_CODE,
-            "name": "پشتیبانی",
-            "country": "IR",
-            "password_hash": hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest(),
-            "created_at": datetime.now().isoformat()
-        }
-        save_db()
+    # اکانت پشتیبانی - همیشه چک و آپدیت شود
+    support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
+    db.setdefault("users", {})[SUPPORT_CODE] = {
+        "code": SUPPORT_CODE,
+        "name": "پشتیبانی",
+        "country": "IR",
+        "password_hash": support_hash,
+        "created_at": datetime.now().isoformat()
+    }
+    save_db()
+    print(f"✅ Support account ready: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
 
 def save_db():
     try:
@@ -64,8 +66,10 @@ def hash_password(password: str) -> str:
 # ========== آنلاین و تماس ==========
 online_users: Dict[str, WebSocket] = {}
 user_names: Dict[str, str] = {}
-active_calls: Dict[str, dict] = {}
-group_calls: Dict[str, Set[str]] = defaultdict(set)
+active_calls: Dict[str, dict] = {}  # تماس‌های خصوصی
+
+# تماس‌های گروهی: group_code -> {"members": set(), "starter": str, "active": bool}
+group_calls: Dict[str, dict] = {}
 
 # ========== FastAPI ==========
 @asynccontextmanager
@@ -112,12 +116,17 @@ class ConnectionManager:
         
         # خروج از تماس گروهی
         for group_code in list(group_calls.keys()):
-            if code in group_calls[group_code]:
-                group_calls[group_code].discard(code)
+            members = group_calls[group_code].get("members", set())
+            if code in members:
+                members.discard(code)
                 await self.broadcast_to_call(group_code, {
                     "type": "call_member_left",
                     "code": code
                 }, exclude=code)
+                
+                # اگر تماس خالی شد حذفش کن
+                if not members:
+                    del group_calls[group_code]
         
         # اطلاع به همه
         await self.broadcast_status(code, False, name)
@@ -173,11 +182,26 @@ class ConnectionManager:
         if group_code not in group_calls:
             return
         
+        members = group_calls[group_code].get("members", set())
         tasks = []
-        for member in group_calls[group_code]:
+        for member in members:
             if member != exclude and member in online_users:
                 try:
                     tasks.append(online_users[member].send_json(data))
+                except:
+                    pass
+        
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    
+    async def broadcast_to_group_members(self, group_code: str, data: dict, exclude: str = None):
+        """ارسال به همه اعضای گروه (نه فقط تماس)"""
+        members = get_group_members(group_code)
+        tasks = []
+        for m in members:
+            if m["code"] != exclude and m["code"] in online_users:
+                try:
+                    tasks.append(online_users[m["code"]].send_json(data))
                 except:
                     pass
         
@@ -502,28 +526,74 @@ async def handle_message(sender: str, data: dict):
     elif msg_type == "group_call":
         group_code = data.get("to")
         
-        group_calls[group_code].add(sender)
-        
-        # اطلاع به اعضای گروه
-        members = get_group_members(group_code)
-        for m in members:
-            if m["code"] != sender:
-                await manager.send_to(m["code"], {
-                    "type": "group_call_started",
-                    "groupCode": group_code,
-                    "groupName": data.get("groupName", "گروه"),
-                    "callerName": sender_name,
-                    "isGroup": True
-                })
-        
-        print(f"📞 Group call started: {group_code} by {sender}")
+        # چک کنیم آیا تماس گروهی فعال وجود دارد
+        if group_code in group_calls and group_calls[group_code].get("active"):
+            # تماس فعال هست - به آن ملحق شو
+            group_calls[group_code]["members"].add(sender)
+            
+            # اطلاع به بقیه اعضای تماس
+            await manager.broadcast_to_call(group_code, {
+                "type": "call_member_joined",
+                "code": sender,
+                "name": sender_name
+            }, exclude=sender)
+            
+            # ارسال لیست اعضای فعلی به کاربر جدید
+            for m in group_calls[group_code]["members"]:
+                if m != sender:
+                    await manager.send_to(sender, {
+                        "type": "call_member_joined",
+                        "code": m,
+                        "name": user_names.get(m, "کاربر")
+                    })
+            
+            # اطلاع به کاربر که تماس قبول شده
+            await manager.send_to(sender, {"type": "call_accepted"})
+            
+            print(f"📞 {sender_name} joined existing group call: {group_code}")
+        else:
+            # تماس جدید ایجاد کن
+            group_calls[group_code] = {
+                "members": {sender},
+                "starter": sender,
+                "active": True
+            }
+            
+            # اطلاع به همه اعضای گروه (نه فقط تماس)
+            members = get_group_members(group_code)
+            for m in members:
+                if m["code"] != sender and m["code"] in online_users:
+                    await manager.send_to(m["code"], {
+                        "type": "incoming_call",
+                        "callerCode": sender,
+                        "callerName": sender_name,
+                        "groupCode": group_code,
+                        "groupName": data.get("groupName", "گروه"),
+                        "isGroup": True
+                    })
+            
+            # به تماس‌گیرنده بگو در حال زنگ زدن
+            await manager.send_to(sender, {
+                "type": "call_ringing",
+                "to": group_code,
+                "isGroup": True
+            })
+            
+            print(f"📞 Group call started: {group_code} by {sender}")
     
     elif msg_type == "join_group_call":
         group_code = data.get("to")
         
-        group_calls[group_code].add(sender)
+        if group_code not in group_calls:
+            group_calls[group_code] = {
+                "members": set(),
+                "starter": sender,
+                "active": True
+            }
         
-        # اطلاع به بقیه
+        group_calls[group_code]["members"].add(sender)
+        
+        # اطلاع به بقیه اعضای تماس
         await manager.broadcast_to_call(group_code, {
             "type": "call_member_joined",
             "code": sender,
@@ -531,27 +601,44 @@ async def handle_message(sender: str, data: dict):
         }, exclude=sender)
         
         # ارسال لیست اعضا به کاربر جدید
-        for m in group_calls[group_code]:
+        for m in group_calls[group_code]["members"]:
             if m != sender:
                 await manager.send_to(sender, {
                     "type": "call_member_joined",
                     "code": m,
                     "name": user_names.get(m, "کاربر")
                 })
+        
+        # اطلاع به شروع‌کننده تماس که کسی جواب داده
+        starter = group_calls[group_code].get("starter")
+        if starter and starter != sender:
+            await manager.send_to(starter, {"type": "call_accepted"})
+        
+        print(f"📞 {sender_name} joined group call: {group_code}")
+    
+    elif msg_type == "reject_group_call":
+        # رد تماس گروهی - فقط برای این کاربر، تماس ادامه دارد
+        group_code = data.get("to")
+        print(f"📵 {sender_name} rejected group call: {group_code}")
+        # هیچ کاری نمی‌کنیم - تماس برای بقیه ادامه دارد
     
     elif msg_type == "leave_group_call":
         group_code = data.get("to")
         
         if group_code in group_calls:
-            group_calls[group_code].discard(sender)
+            group_calls[group_code]["members"].discard(sender)
             
             await manager.broadcast_to_call(group_code, {
                 "type": "call_member_left",
                 "code": sender
             })
             
-            if not group_calls[group_code]:
+            # اگر هیچ‌کس در تماس نمانده، تماس را حذف کن
+            if not group_calls[group_code]["members"]:
                 del group_calls[group_code]
+                print(f"📵 Group call ended: {group_code}")
+            else:
+                print(f"📵 {sender_name} left group call: {group_code}")
 
 def get_group_members(group_code: str) -> List[dict]:
     """دریافت اعضای گروه - از کلاینت‌ها sync می‌شود"""
