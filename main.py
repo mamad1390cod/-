@@ -1118,6 +1118,23 @@ async def admin_ban(admin_key: str = "", user_code: str = "", duration: int = 0,
     
     return {"success": True}
 
+@app.post("/api/admin/unban")
+async def admin_unban(admin_key: str = "", user_code: str = ""):
+    admin_code = await get_setting("admin_code")
+    if admin_key != admin_code:
+        raise HTTPException(403, "دسترسی ندارید")
+    
+    await unban_user(user_code)
+    
+    # اگر کاربر آنلاین است، اتصال را قطع کن تا دوباره چک بن شود
+    if user_code in online_users:
+        try:
+            await online_users[user_code].close()
+        except:
+            pass
+    
+    return {"success": True}
+
 @app.get("/api/admin/settings")
 async def get_admin_settings(admin_key: str = ""):
     admin_code = await get_setting("admin_code")
