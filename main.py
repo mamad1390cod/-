@@ -26,17 +26,17 @@ SUPPORT_PASSWORD = "mamad1390"
 
 # ========== MySQL ==========
 MYSQL_CONFIG = {
-    "host": os.environ.get("MYSQL_HOST", "localhost"),
+    "host": os.environ.get("MYSQL_HOST", "mysql.railway.internal"),
     "port": int(os.environ.get("MYSQL_PORT", 3306)),
     "user": os.environ.get("MYSQL_USER", "root"),
-    "password": os.environ.get("MYSQL_PASSWORD", ""),
-    "db": os.environ.get("MYSQL_DATABASE", "messenger"),
+    "password": os.environ.get("MYSQL_PASSWORD", "OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb"),
+    "db": os.environ.get("MYSQL_DATABASE", "railway"),
     "charset": "utf8mb4",
     "autocommit": True
 }
 
 # یا از URL کامل
-MYSQL_URL = os.environ.get("MYSQL_URL", os.environ.get("DATABASE_URL"))
+MYSQL_URL = os.environ.get("MYSQL_URL", os.environ.get("DATABASE_URL", "mysql://root:OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb@mysql.railway.internal:3306/railway"))
 pool: Optional[aiomysql.Pool] = None
 
 def parse_mysql_url(url: str) -> dict:
