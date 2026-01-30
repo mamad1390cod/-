@@ -999,6 +999,38 @@ async def handle_message(sender: str, data: dict):
             })
             if not group_calls[group_code]["members"]:
                 del group_calls[group_code]
+    
+    elif msg_type == "add_member":
+        group_code = data.get("groupCode")
+        member_code = data.get("memberCode")
+        if group_code in group_calls and group_calls[group_code].get("active"):
+            group_calls[group_code]["members"].add(member_code)
+            # اطلاع به عضو جدید
+            await manager.send_to(member_code, {
+                "type": "added_to_group_call",
+                "groupCode": group_code
+            })
+            # اطلاع به دیگران
+            await manager.broadcast_to_call(group_code, {
+                "type": "call_member_joined",
+                "code": member_code,
+                "name": user_names.get(member_code, "کاربر")
+            }, exclude=member_code)
+    
+    elif msg_type == "kick_member":
+        group_code = data.get("groupCode")
+        member_code = data.get("memberCode")
+        if group_code in group_calls and member_code in group_calls[group_code]["members"]:
+            group_calls[group_code]["members"].discard(member_code)
+            await manager.send_to(member_code, {
+                "type": "kicked_from_group_call",
+                "groupCode": group_code
+            })
+            await manager.broadcast_to_call(group_code, {
+                "type": "call_member_left",
+                "code": member_code,
+                "name": user_names.get(member_code, "کاربر")
+            })
 
 # ========== API ==========
 @app.post("/api/register")
