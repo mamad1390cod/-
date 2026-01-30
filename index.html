@@ -1089,30 +1089,58 @@
         }
 
         // ========== WebSocket ==========
+        let wsReconnectTimeout = null;
+        let isConnecting = false;
+        
         function connectToServer() {
+            if (isConnecting || (ws && ws.readyState === WebSocket.OPEN)) return;
+            
+            isConnecting = true;
             const url = `${getServerUrl()}/${currentUser.code}/${encodeURIComponent(currentUser.name)}`;
+            
+            console.log('🔌 Connecting to:', url);
+            
             ws = new WebSocket(url);
             ws.binaryType = 'arraybuffer';
             
             ws.onopen = () => {
-                console.log('Connected');
+                console.log('✅ Connected!');
+                isConnecting = false;
+                showToast('متصل شد ✓', 1500);
                 syncData();
             };
             
             ws.onmessage = (event) => {
                 if (typeof event.data === 'string') {
-                    handleMessage(JSON.parse(event.data));
+                    try {
+                        const data = JSON.parse(event.data);
+                        console.log('📨 Received:', data.type, data);
+                        handleMessage(data);
+                    } catch(e) {
+                        console.error('Parse error:', e);
+                    }
                 } else if (isInCall && isSpeakerOn) {
                     playAudio(event.data);
                 }
             };
             
-            ws.onclose = () => {
-                console.log('Disconnected');
-                setTimeout(() => { if (currentUser) connectToServer(); }, 3000);
+            ws.onclose = (e) => {
+                console.log('❌ Disconnected:', e.code, e.reason);
+                isConnecting = false;
+                
+                if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
+                wsReconnectTimeout = setTimeout(() => {
+                    if (currentUser) {
+                        console.log('🔄 Reconnecting...');
+                        connectToServer();
+                    }
+                }, 2000);
             };
             
-            ws.onerror = (e) => console.error('WS Error:', e);
+            ws.onerror = (e) => {
+                console.error('⚠️ WS Error:', e);
+                isConnecting = false;
+            };
         }
 
         function syncData() {
@@ -1126,25 +1154,35 @@
         }
 
         function handleMessage(data) {
+            console.log('🔔 Processing:', data.type);
+            
             switch(data.type) {
                 case 'banned':
-                    showToast('شما بن شده‌اید: ' + (data.info?.reason || ''));
+                    showToast('شما بن شده‌اید: ' + (data.reason || ''));
                     logout();
                     break;
                     
                 case 'contact_status':
+                    console.log(`👤 ${data.name} is ${data.online ? 'online' : 'offline'}`);
                     updateContactStatus(data.code, data.online, data.name);
+                    // آپدیت وضعیت در صفحه چت
+                    if (currentChat === data.code && currentChatType === 'contact') {
+                        document.getElementById('chatStatus').textContent = data.online ? '🟢 آنلاین' : 'آفلاین';
+                    }
                     break;
                     
                 case 'message':
+                    console.log(`💬 Message from ${data.from}: ${data.text?.slice(0, 30)}`);
                     receiveMessage(data);
                     break;
                     
                 case 'group_message':
+                    console.log(`👪 Group msg in ${data.groupCode} from ${data.from}`);
                     receiveGroupMessage(data);
                     break;
                     
                 case 'media':
+                    console.log(`📎 Media from ${data.from}: ${data.mediaType}`);
                     receiveMedia(data);
                     break;
                     
@@ -1157,42 +1195,50 @@
                     break;
                     
                 case 'incoming_call':
+                    console.log('📞 Incoming call from:', data.callerName);
                     playRingtone();
                     showIncomingCall(data);
                     break;
                     
                 case 'call_ringing':
+                    console.log('🔔 Call ringing...');
                     playRingtone();
                     document.getElementById('callStatusText').textContent = '🔔 در حال زنگ زدن...';
                     break;
                     
                 case 'call_accepted':
+                    console.log('✅ Call accepted!');
                     stopRingtone();
                     startCallAudio();
                     break;
                     
                 case 'call_rejected':
+                    console.log('❌ Call rejected');
                     stopRingtone();
                     endCallCleanup();
                     showToast('تماس رد شد');
                     break;
                     
                 case 'call_ended':
+                    console.log('📵 Call ended');
                     stopRingtone();
                     endCallCleanup();
                     showToast('تماس پایان یافت');
                     break;
                     
                 case 'group_call_started':
+                    console.log('📞 Group call started:', data.groupName);
                     playRingtone();
                     showIncomingCall({ ...data, isGroup: true });
                     break;
                     
                 case 'call_member_joined':
+                    console.log('➕ Member joined call:', data.name);
                     addCallMember(data.code, data.name);
                     break;
                     
                 case 'call_member_left':
+                    console.log('➖ Member left call:', data.code);
                     removeCallMember(data.code);
                     break;
                     
