@@ -87,6 +87,69 @@ async def init_db():
     """اتصال به MySQL یا SQLite"""
     global pool, sqlite_conn
 
+    # اول چک کن اگر DATABASE_URL یا MYSQL_URL موجود باشه
+    db_url = MYSQL_URL
+    if db_url and db_url != "mysql://root:OiqwqvQpDEjXVnXvRPdmhIjlGyYEdhPb@mysql.railway.internal:3306/railway":
+        try:
+            config = parse_mysql_url(db_url)
+            print(f"🔌 Connecting to MySQL via URL: {config['host']}:{config['port']}/{config['db']}")
+
+            pool = await aiomysql.create_pool(
+                minsize=1,
+                maxsize=10,
+                **config
+            )
+
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT 1")
+                    await conn.commit()
+            
+            # ساخت جداول MySQL
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    # جدول کاربران
+                    await cur.execute("""
+                        CREATE TABLE IF NOT EXISTS users (
+                            code VARCHAR(20) PRIMARY KEY,
+                            name VARCHAR(100) NOT NULL,
+                            country VARCHAR(10),
+                            password_hash VARCHAR(64) NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """)
+                    
+                    # جدول بن‌ها
+                    await cur.execute("""
+                        CREATE TABLE IF NOT EXISTS bans (
+                            user_code VARCHAR(20) PRIMARY KEY,
+                            reason VARCHAR(255),
+                            is_permanent BOOLEAN DEFAULT FALSE,
+                            until_time DATETIME,
+                            banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_code) REFERENCES users(code) ON DELETE CASCADE
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """)
+                    
+                    # اکانت پشتیبانی
+                    support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
+                    await cur.execute("""
+                        INSERT INTO users (code, name, country, password_hash)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE 
+                        name = VALUES(name),
+                        password_hash = VALUES(password_hash)
+                    """, (SUPPORT_CODE, "پشتیبانی", "IR", support_hash))
+                    
+                    await conn.commit()
+            
+            print(f"✅ MySQL connected! Support: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ MySQL via URL Error: {e}")
+    
+    # اگر URL کار نکرد، از MYSQL_CONFIG استفاده کن
     try:
         config = MYSQL_CONFIG
 
