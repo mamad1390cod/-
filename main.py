@@ -119,29 +119,44 @@ async def init_db():
                         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """)
                     
-                    # جدول بن‌ها
+# جدول تنظیمات
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key VARCHAR(50) PRIMARY KEY,
+                        value VARCHAR(255) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                
+                # جدول بن‌ها
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS bans (
+                        user_code VARCHAR(20) PRIMARY KEY,
+                        reason TEXT,
+                        is_permanent BOOLEAN DEFAULT FALSE,
+                        until_time DATETIME,
+                        banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_code) REFERENCES users(code) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                for key, value in default_settings.items():
                     await cur.execute("""
-                        CREATE TABLE IF NOT EXISTS bans (
-                            user_code VARCHAR(20) PRIMARY KEY,
-                            reason VARCHAR(255),
-                            is_permanent BOOLEAN DEFAULT FALSE,
-                            until_time DATETIME,
-                            banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY (user_code) REFERENCES users(code) ON DELETE CASCADE
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                    """)
-                    
-                    # اکانت پشتیبانی
-                    support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
-                    await cur.execute("""
-                        INSERT INTO users (code, name, country, password_hash)
-                        VALUES (%s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE 
-                        name = VALUES(name),
-                        password_hash = VALUES(password_hash)
-                    """, (SUPPORT_CODE, "پشتیبانی", "IR", support_hash))
-                    
-                    await conn.commit()
+                        INSERT INTO settings (key, value) VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE value = VALUES(value)
+                    """, (key, value))
+                
+                # اکانت پشتیبانی
+                support_code = default_settings["support_code"]
+                support_pass = default_settings["support_password"]
+                support_hash = hashlib.sha256(support_pass.encode()).hexdigest()
+                await cur.execute("""
+                    INSERT INTO users (code, name, country, password_hash)
+                    VALUES (%s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE 
+                    name = VALUES(name),
+                    password_hash = VALUES(password_hash)
+                """, (support_code, "پشتیبانی", "IR", support_hash))
+                
+                await conn.commit()
             
             print(f"✅ MySQL connected! Support: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
             return True
@@ -178,16 +193,36 @@ async def init_db():
             )
         """)
         
+        await sqlite_conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        
+        # تنظیمات پیش‌فرض
+        default_settings = {
+            "admin_code": "1361649093",
+            "support_code": "13901390",
+            "support_password": "mamad1390"
+        }
+        for key, value in default_settings.items():
+            await sqlite_conn.execute("""
+                INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
+            """, (key, value))
+        
         # اکانت پشتیبانی
-        support_hash = hashlib.sha256(SUPPORT_PASSWORD.encode()).hexdigest()
+        support_code = default_settings["support_code"]
+        support_pass = default_settings["support_password"]
+        support_hash = hashlib.sha256(support_pass.encode()).hexdigest()
         await sqlite_conn.execute("""
             INSERT OR REPLACE INTO users (code, name, country, password_hash)
             VALUES (?, ?, ?, ?)
-        """, (SUPPORT_CODE, "پشتیبانی", "IR", support_hash))
+        """, (support_code, "پشتیبانی", "IR", support_hash))
         
         await sqlite_conn.commit()
         
-        print(f"✅ SQLite connected! Support: {SUPPORT_CODE} / {SUPPORT_PASSWORD}")
+        print(f"✅ SQLite connected! Support: {support_code} / {support_pass}")
         return True
         
     except Exception as e2:
@@ -447,54 +482,89 @@ async def unban_user(code: str) -> bool:
     
     return False
 
-async def is_banned(code: str) -> tuple[bool, str]:
-    """چک کردن بن بودن"""
+async def is_banned(code: str) -> tuple:
+    """چک کردن بن کاربر"""
     if pool:
         try:
             async with pool.acquire() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cur:
-                    await cur.execute("SELECT * FROM bans WHERE user_code = %s", (code,))
+                    await cur.execute("SELECT reason, is_permanent, until_time FROM bans WHERE user_code = %s", (code,))
                     ban = await cur.fetchone()
-                    
-                    if not ban:
-                        return False, ""
-                    
-                    if ban['is_permanent']:
-                        return True, ban.get('reason', '')
-                    
-                    if ban['until_time'] and ban['until_time'] > datetime.now():
-                        return True, ban.get('reason', '')
-                    
-                    # بن منقضی شده - حذفش کن
-                    await cur.execute("DELETE FROM bans WHERE user_code = %s", (code,))
-                    await conn.commit()
+                    if ban:
+                        if ban.get('is_permanent'):
+                            return True, ban.get('reason', '')
+                        elif ban.get('until_time') and ban['until_time'] > datetime.now():
+                            return True, ban.get('reason', '')
                     return False, ""
-                    
         except Exception as e:
             print(f"❌ is_banned MySQL error: {e}")
     
     if sqlite_conn:
         try:
-            async with sqlite_conn.execute("SELECT * FROM bans WHERE user_code = ?", (code,)) as cur:
-                row = await cur.fetchone()
-                if not row:
-                    return False, ""
-                
-                if row[5]:  # is_permanent
-                    return True, row[4] or ""
-                
-                if row[6] and datetime.fromisoformat(row[6]) > datetime.now():
-                    return True, row[4] or ""
-                
-                # بن منقضی شده - حذفش کن
-                await sqlite_conn.execute("DELETE FROM bans WHERE user_code = ?", (code,))
-                await sqlite_conn.commit()
+            async with sqlite_conn.execute("SELECT reason, is_permanent, until_time FROM bans WHERE user_code = ?", (code,)) as cur:
+                ban = await cur.fetchone()
+                if ban:
+                    if ban[1]:  # is_permanent
+                        return True, ban[0] or ''
+                    elif ban[2]:
+                        until = datetime.fromisoformat(ban[2])
+                        if until > datetime.now():
+                            return True, ban[0] or ''
                 return False, ""
-                
         except Exception as e:
             print(f"❌ is_banned SQLite error: {e}")
     
-    return False, ""
+    # Fallback to JSON
+    return is_banned_json(code)
+
+async def get_setting(key: str) -> str:
+    """دریافت تنظیمات"""
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute("SELECT value FROM settings WHERE key = %s", (key,))
+                    row = await cur.fetchone()
+                    return row['value'] if row else ""
+        except Exception as e:
+            print(f"❌ get_setting MySQL error: {e}")
+    
+    if sqlite_conn:
+        try:
+            async with sqlite_conn.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else ""
+        except Exception as e:
+            print(f"❌ get_setting SQLite error: {e}")
+    
+    return ""
+
+async def set_setting(key: str, value: str) -> bool:
+    """تنظیم تنظیمات"""
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        INSERT INTO settings (key, value) VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE value = VALUES(value)
+                    """, (key, value))
+                    await conn.commit()
+                    return True
+        except Exception as e:
+            print(f"❌ set_setting MySQL error: {e}")
+    
+    if sqlite_conn:
+        try:
+            await sqlite_conn.execute("""
+                INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)
+            """, (key, value))
+            await sqlite_conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ set_setting SQLite error: {e}")
+    
+    return False
 
 # ========== JSON Fallback ==========
 DATA_FILE = BASE_DIR / "data.json"
@@ -610,6 +680,7 @@ def is_banned_json(code: str) -> tuple[bool, str]:
 online_users: Dict[str, WebSocket] = {}
 user_names: Dict[str, str] = {}
 group_calls: Dict[str, dict] = {}
+active_calls: Dict[str, str] = {}  # caller -> receiver
 
 # ========== FastAPI ==========
 @asynccontextmanager
@@ -651,6 +722,14 @@ class ConnectionManager:
                 }, exclude=code)
                 if not members:
                     del group_calls[group_code]
+        
+        # خروج از تماس معمولی
+        to_remove = []
+        for caller, receiver in active_calls.items():
+            if caller == code or receiver == code:
+                to_remove.append(caller)
+        for c in to_remove:
+            del active_calls[c]
         
         await self.broadcast_status(code, False, name)
     
@@ -718,13 +797,25 @@ async def websocket_endpoint(ws: WebSocket, code: str, name: str):
             msg = await ws.receive()
             
             if "bytes" in msg:
-                # صدا - ارسال به تماس گروهی
+                # صدا - ارسال به تماس گروهی یا تماس معمولی
+                audio_sent = False
                 for gc, call_data in list(group_calls.items()):
                     if code in call_data.get("members", set()):
                         for m in call_data["members"]:
                             if m != code:
                                 await manager.send_audio(m, msg["bytes"])
+                        audio_sent = True
                         break
+                
+                # اگر در تماس گروهی نبود، چک کن تماس معمولی
+                if not audio_sent:
+                    for caller, receiver in active_calls.items():
+                        if caller == code and receiver in online_users:
+                            await manager.send_audio(receiver, msg["bytes"])
+                            break
+                        elif receiver == code and caller in online_users:
+                            await manager.send_audio(caller, msg["bytes"])
+                            break
             
             elif "text" in msg:
                 try:
@@ -796,6 +887,7 @@ async def handle_message(sender: str, data: dict):
     
     elif msg_type == "call_request":
         to = data.get("to")
+        active_calls[sender] = to  # فرض caller -> receiver
         await manager.send_to(to, {
             "type": "incoming_call",
             "callerCode": sender,
@@ -805,14 +897,23 @@ async def handle_message(sender: str, data: dict):
     
     elif msg_type == "call_accept":
         to = data.get("to")
+        active_calls[to] = sender  # receiver -> caller
         await manager.send_to(to, {"type": "call_accepted"})
     
     elif msg_type == "call_reject":
         to = data.get("to")
+        if sender in active_calls:
+            del active_calls[sender]
+        if to in active_calls:
+            del active_calls[to]
         await manager.send_to(to, {"type": "call_rejected"})
     
     elif msg_type == "call_end":
         to = data.get("to")
+        if sender in active_calls:
+            del active_calls[sender]
+        if to in active_calls:
+            del active_calls[to]
         await manager.send_to(to, {"type": "call_ended"})
     
     # تماس گروهی
@@ -859,6 +960,8 @@ async def handle_message(sender: str, data: dict):
                     })
             
             await manager.send_to(sender, {"type": "call_ringing", "isGroup": True})
+            # برای تماس گروهی، starter مستقیم accepted می‌شه
+            await manager.send_to(sender, {"type": "call_accepted"})
     
     elif msg_type == "join_group_call":
         group_code = data.get("to")
@@ -929,7 +1032,8 @@ async def login(data: dict):
     password = data.get("password", "")
     
     # ادمین
-    if code == ADMIN_CODE:
+    admin_code = await get_setting("admin_code")
+    if code == admin_code:
         return {"success": True, "isAdmin": True}
     
     # چک بن
@@ -953,7 +1057,8 @@ async def login(data: dict):
 
 @app.get("/api/admin/users")
 async def admin_users(admin_key: str = ""):
-    if admin_key != ADMIN_CODE:
+    admin_code = await get_setting("admin_code")
+    if admin_key != admin_code:
         raise HTTPException(403, "دسترسی ندارید")
     
     users = await get_all_users()
@@ -965,7 +1070,8 @@ async def admin_users(admin_key: str = ""):
 
 @app.post("/api/admin/ban")
 async def admin_ban(admin_key: str = "", user_code: str = "", duration: int = 0, reason: str = ""):
-    if admin_key != ADMIN_CODE:
+    admin_code = await get_setting("admin_code")
+    if admin_key != admin_code:
         raise HTTPException(403, "دسترسی ندارید")
     
     await ban_user(user_code, duration, reason)
@@ -980,12 +1086,65 @@ async def admin_ban(admin_key: str = "", user_code: str = "", duration: int = 0,
     
     return {"success": True}
 
-@app.post("/api/admin/unban")
-async def admin_unban(admin_key: str = "", user_code: str = ""):
-    if admin_key != ADMIN_CODE:
+@app.get("/api/admin/settings")
+async def get_admin_settings(admin_key: str = ""):
+    admin_code = await get_setting("admin_code")
+    if admin_key != admin_code:
         raise HTTPException(403, "دسترسی ندارید")
     
-    await unban_user(user_code)
+    settings = {}
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT `key`, value FROM settings")
+                    rows = await cur.fetchall()
+                    for row in rows:
+                        settings[row[0]] = row[1]
+        except Exception as e:
+            print(f"❌ get_admin_settings MySQL error: {e}")
+    
+    if sqlite_conn:
+        async with sqlite_conn.execute("SELECT key, value FROM settings") as cur:
+            async for row in cur:
+                settings[row[0]] = row[1]
+    return {"settings": settings}
+
+@app.post("/api/admin/settings")
+async def set_admin_settings(admin_key: str = "", settings: dict = {}):
+    admin_code = await get_setting("admin_code")
+    if admin_key != admin_code:
+        raise HTTPException(403, "دسترسی ندارید")
+    
+    for key, value in settings.items():
+        await set_setting(key, value)
+    
+    # اگر support_code یا password تغییر کرد، کاربر پشتیبانی رو آپدیت کن
+    support_code = await get_setting("support_code")
+    support_pass = await get_setting("support_password")
+    if support_code and support_pass:
+        support_hash = hashlib.sha256(support_pass.encode()).hexdigest()
+        
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("""
+                            UPDATE users SET password_hash = %s WHERE code = %s
+                        """, (support_hash, support_code))
+                        await conn.commit()
+            except:
+                pass
+        if sqlite_conn:
+            try:
+                await sqlite_conn.execute("""
+                    INSERT OR REPLACE INTO users (code, name, country, password_hash)
+                    VALUES (?, ?, ?, ?)
+                """, (support_code, "پشتیبانی", "IR", support_hash))
+                await sqlite_conn.commit()
+            except:
+                pass
+    
     return {"success": True}
 
 @app.get("/")

@@ -513,6 +513,18 @@
                     <div id="adminUsersList" class="overflow-auto max-h-[60vh]"></div>
                 </div>
                 
+                <div class="glass rounded-xl p-4 mb-4">
+                    <h2 class="text-lg font-bold mb-4">⚙️ تنظیمات سیستم</h2>
+                    <div id="adminSettings" class="space-y-4">
+                        <div id="settingsList"></div>
+                        <div class="flex gap-3">
+                            <button onclick="addNewSetting()" class="px-4 py-2 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30">افزودن تنظیمات جدید</button>
+                            <button onclick="loadAdminSettings()" class="px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30">بارگذاری</button>
+                            <button onclick="saveAllSettings()" class="px-4 py-2 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30">ذخیره همه</button>
+                        </div>
+                    </div>
+                </div>
+                
                 <div id="adminStats" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
             </div>
         </div>
@@ -994,6 +1006,7 @@
             document.getElementById('mainPage').classList.add('hidden');
             document.getElementById('adminPage').classList.remove('hidden');
             refreshAdminUsers();
+            loadAdminSettings();
         }
 
         function logoutAdmin() {
@@ -1085,6 +1098,105 @@
                 refreshAdminUsers();
             } catch(e) {
                 showToast('خطا');
+            }
+        }
+
+        async function loadAdminSettings() {
+            try {
+                const res = await fetch(`/api/admin/settings?admin_key=${ADMIN_CODE}`);
+                const data = await res.json();
+                if (data.settings) {
+                    const list = document.getElementById('settingsList');
+                    list.innerHTML = '';
+                    for (const [key, value] of Object.entries(data.settings)) {
+                        const div = document.createElement('div');
+                        div.className = 'flex gap-4 items-center mb-2';
+                        div.innerHTML = `
+                            <input type="text" value="${key}" class="setting-key flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white" readonly placeholder="کلید">
+                            <input type="text" value="${value}" class="setting-value flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white" readonly placeholder="مقدار">
+                            <button onclick="editSetting(this)" class="px-3 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30">ویرایش</button>
+                            <button onclick="removeSetting(this)" class="px-3 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30">حذف</button>
+                        `;
+                        list.appendChild(div);
+                    }
+                    showToast('تنظیمات بارگذاری شد');
+                }
+            } catch(e) {
+                showToast('خطا در بارگذاری تنظیمات');
+            }
+        }
+
+        function addNewSetting() {
+            const list = document.getElementById('settingsList');
+            const div = document.createElement('div');
+            div.className = 'flex gap-4 items-center mb-2';
+            div.innerHTML = `
+                <input type="text" class="setting-key flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white" placeholder="کلید">
+                <input type="text" class="setting-value flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white" placeholder="مقدار">
+                <button onclick="editSetting(this)" class="px-3 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30">ویرایش</button>
+                <button onclick="removeSetting(this)" class="px-3 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30">حذف</button>
+            `;
+            list.appendChild(div);
+        }
+
+        function editSetting(btn) {
+            const div = btn.parentElement;
+            const keyInput = div.querySelector('.setting-key');
+            const valueInput = div.querySelector('.setting-value');
+            if (btn.textContent === 'ویرایش') {
+                keyInput.readonly = false;
+                valueInput.readonly = false;
+                btn.textContent = 'ذخیره';
+                btn.className = 'px-3 py-2 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30';
+            } else {
+                keyInput.readonly = true;
+                valueInput.readonly = true;
+                btn.textContent = 'ویرایش';
+                btn.className = 'px-3 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30';
+            }
+        }
+
+        function removeSetting(btn) {
+            btn.parentElement.remove();
+        }
+
+        async function saveAllSettings() {
+            const settings = {};
+            const keys = document.querySelectorAll('.setting-key');
+            const values = document.querySelectorAll('.setting-value');
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i].value.trim();
+                const value = values[i].value.trim();
+                if (key) {
+                    settings[key] = value;
+                }
+            }
+            
+            try {
+                const res = await fetch(`/api/admin/settings?admin_key=${ADMIN_CODE}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                if (res.ok) {
+                    showToast('تنظیمات ذخیره شد');
+                    // بروزرسانی ADMIN_CODE محلی اگر تغییر کرد
+                    if (settings.admin_code) {
+                        ADMIN_CODE = settings.admin_code;
+                    }
+                    // همه فیلدها رو readonly کن
+                    document.querySelectorAll('.setting-key, .setting-value').forEach(input => input.readonly = true);
+                    document.querySelectorAll('button').forEach(btn => {
+                        if (btn.textContent === 'ذخیره') {
+                            btn.textContent = 'ویرایش';
+                            btn.className = 'px-3 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30';
+                        }
+                    });
+                } else {
+                    showToast('خطا در ذخیره');
+                }
+            } catch(e) {
+                showToast('خطا در ذخیره تنظیمات');
             }
         }
 
